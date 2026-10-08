@@ -281,7 +281,9 @@ export default function CanvasStage({
     }
 
     const t = useEditor.getState().tool;
-    (e.target as Element).setPointerCapture(e.pointerId);
+    try {
+      (e.target as Element).setPointerCapture(e.pointerId);
+    } catch {}
     const isPan = t === "pan" || spaceHeld.current || e.button === 1;
     if (isPan) {
       panning.current = true;
@@ -549,14 +551,14 @@ function DetectionActionBar({ onApply }: { onApply: () => void }) {
   const busy = detectStatus === "segmenting";
 
   return (
-    <div className="absolute top-3 right-3 z-20 flex items-center gap-2 rounded-lg border bg-popover/95 p-2 text-sm shadow-md backdrop-blur">
+    <div className="absolute top-3 right-3 left-3 z-20 flex flex-wrap items-center justify-center gap-1.5 rounded-lg border bg-popover/95 p-1.5 text-sm shadow-md backdrop-blur md:left-auto md:justify-end md:gap-2 md:p-2">
       <span className="px-1 text-xs text-muted-foreground">
         {selectedCount}/{detections.length} selected
       </span>
       <Button
         variant="outline"
         size="sm"
-        className="h-7 px-2 text-xs"
+        className="h-9 px-3 text-sm md:h-7 md:px-2 md:text-xs"
         onClick={() => toggleAll(true)}
         disabled={busy}
       >
@@ -565,16 +567,27 @@ function DetectionActionBar({ onApply }: { onApply: () => void }) {
       <Button
         variant="outline"
         size="sm"
-        className="h-7 px-2 text-xs"
+        className="h-9 px-3 text-sm md:h-7 md:px-2 md:text-xs"
         onClick={() => toggleAll(false)}
         disabled={busy}
       >
         None
       </Button>
-      <Button variant="ghost" size="sm" className="h-7 px-2 text-xs" onClick={clear} disabled={busy}>
+      <Button
+        variant="ghost"
+        size="sm"
+        className="h-9 px-3 text-sm md:h-7 md:px-2 md:text-xs"
+        onClick={clear}
+        disabled={busy}
+      >
         Cancel
       </Button>
-      <Button size="sm" className="h-7 px-2 text-xs" onClick={onApply} disabled={busy || selectedCount === 0}>
+      <Button
+        size="sm"
+        className="h-9 px-3 text-sm md:h-7 md:px-2 md:text-xs"
+        onClick={onApply}
+        disabled={busy || selectedCount === 0}
+      >
         {busy ? "Applying…" : `Apply (${selectedCount})`}
       </Button>
     </div>
@@ -687,7 +700,12 @@ function StageStatus({ onFit }: { onFit: () => void }) {
           <span className="tabular-nums">
             {image.width}×{image.height}px
           </span>
-          <Button variant="outline" size="sm" className="h-6 px-2 text-xs" onClick={onFit}>
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-8 px-3 text-xs md:h-6 md:px-2"
+            onClick={onFit}
+          >
             Fit
           </Button>
           <span className="ml-auto hidden sm:inline">Scroll to zoom · Space-drag to pan</span>
