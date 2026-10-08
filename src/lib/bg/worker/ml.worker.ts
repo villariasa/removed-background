@@ -19,6 +19,23 @@ env.allowRemoteModels = REMOTE;
 env.allowLocalModels = !REMOTE;
 if (!REMOTE) env.localModelPath = "/models/";
 
+// Force single-threaded WASM. Threaded WASM needs SharedArrayBuffer, which
+// only exists when the page is cross-origin isolated (COOP+COEP) — and when
+// it IS available, onnxruntime-web auto-opts into a pthread-worker codepath
+// that throws "Connection closed" under a strict CSP (it needs 'unsafe-eval'
+// to bootstrap, which we don't grant). Pinning numThreads avoids that whole
+// failure class and removes the need for COOP/COEP entirely. WebGPU is
+// unaffected — this only touches the WASM/CPU fallback.
+try {
+  // Non-null assertion: TS types this as possibly undefined since it's
+  // populated by the onnx backend module, but it's present synchronously in
+  // the browser bundle. The try/catch is the real runtime safety net.
+  env.backends.onnx.wasm!.numThreads = 1;
+  env.backends.onnx.wasm!.proxy = false;
+} catch (err) {
+  console.warn("Could not pin onnxruntime-web to single-threaded WASM:", err);
+}
+
 const MODEL_ID = "briaai/RMBG-1.4";
 // Run inference at a capped working resolution for speed; the matte is upscaled
 // to native res before it leaves the worker (plan §7).
