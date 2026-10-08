@@ -2,6 +2,9 @@
 
 import { useRef, useState } from "react";
 import { useEditor } from "@/lib/bg/store";
+import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
+import { ImageDown, Upload } from "lucide-react";
 
 export default function Dropzone({ onFile }: { onFile: (file: File) => void }) {
   const [over, setOver] = useState(false);
@@ -10,7 +13,10 @@ export default function Dropzone({ onFile }: { onFile: (file: File) => void }) {
 
   return (
     <div
-      className={`dropzone${over ? " over" : ""}`}
+      className={cn(
+        "absolute inset-0 flex flex-col items-center justify-center gap-4 p-8 text-center transition-colors",
+        over && "bg-primary/5 outline-2 -outline-offset-16 outline-dashed outline-primary",
+      )}
       onDragOver={(e) => {
         e.preventDefault();
         setOver(true);
@@ -23,21 +29,24 @@ export default function Dropzone({ onFile }: { onFile: (file: File) => void }) {
         if (f) onFile(f);
       }}
     >
-      <div style={{ fontSize: "3rem" }} aria-hidden>
-        🖼️
+      <div className="flex size-16 items-center justify-center rounded-2xl bg-secondary text-secondary-foreground">
+        <ImageDown className="size-8" />
       </div>
-      <h2>Drop an image to remove its background</h2>
-      <p>
+      <h2 className="text-xl font-semibold tracking-tight text-foreground">
+        Drop an image to remove its background
+      </h2>
+      <p className="max-w-md text-sm text-muted-foreground">
         Drag &amp; drop, paste from clipboard, or choose a file. PNG, JPEG, WebP, GIF, or BMP,
-        up to 15 MB.
-        <br />
-        Everything runs in your browser — nothing is uploaded.
+        up to 15 MB. Everything runs in your browser — nothing is uploaded.
       </p>
-      <button className="cta" onClick={() => inputRef.current?.click()}>
-        Choose image
-      </button>
+      <Button size="lg" onClick={() => inputRef.current?.click()}>
+        <Upload /> Choose image
+      </Button>
       {error && (
-        <div className="errbox" role="alert" style={{ marginTop: "0.5rem" }}>
+        <div
+          role="alert"
+          className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive"
+        >
           {error}
         </div>
       )}
