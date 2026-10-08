@@ -2,8 +2,44 @@
 
 A fast, **private**, 100% in-browser AI background removal tool. One-click AI removal **plus** manual refinement ("shade to keep / shade to remove" brush, edge tuning, and smart point selection) — no account, zero uploads, runs entirely on your device.
 
-> **Status:** Planning. The full technical spec lives in
-> **[`BACKGROUND_REMOVER_PLAN.md`](./BACKGROUND_REMOVER_PLAN.md)** — read it before writing code.
+> **Status:** Implemented (Phases 1–3). One-click AI removal, manual keep/remove brush,
+> edge refinement, background options, and export all work in-browser. The full technical
+> spec lives in **[`BACKGROUND_REMOVER_PLAN.md`](./BACKGROUND_REMOVER_PLAN.md)**.
+
+---
+
+## Run it
+
+```bash
+npm install --no-bin-links   # --no-bin-links only needed on filesystems without symlinks
+npm run dev                  # http://localhost:3000/tools/background-remover
+# or: node node_modules/next/dist/bin/next dev   (if bin symlinks weren't created)
+```
+
+The first background removal downloads the RMBG-1.4 weights (~44 MB) from the HuggingFace
+Hub once, then caches them for instant repeat use. Nothing else leaves your device.
+
+## Project layout
+
+```
+src/app/tools/background-remover/   # routes: editor + developer / api / security pages
+src/components/bg/                  # Editor, CanvasStage, Toolbar, panels, ToolNav
+src/components/ui/                  # shadcn/ui primitives (new-york, neutral, clean white)
+src/lib/bg/                         # mask ops, compositor, image validation, Zustand store
+src/lib/bg/worker/                  # ML worker (Transformers.js + RMBG-1.4) + RPC client
+```
+
+## Implementation notes
+
+- **UI:** shadcn/ui + Tailwind CSS v4 (clean white, formal aesthetic).
+- **Canvas:** a hand-rolled Canvas 2D stage (pan/zoom, soft brush stamping) rather than Konva —
+  fewer dependencies and full control of the compositing hot path; can graduate to WebGL later.
+- **Not yet built (Phase 4+):** MobileSAM click-to-select, edge-aware "magnetic" brush,
+  BiRefNet upgrade. The single-mask architecture leaves room to drop these in.
+- **`npm audit`:** the remaining advisories are **Node-only** transitive deps of
+  Transformers.js (`sharp`, `onnxruntime-node`, `global-agent`) that are never bundled into the
+  browser (the client uses `onnxruntime-web`), plus a build-time-only postcss advisory inside
+  Next. None affect the shipped client runtime.
 
 ---
 
