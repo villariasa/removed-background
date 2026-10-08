@@ -322,14 +322,14 @@ export default function Editor() {
   return (
     <div className="grid h-[calc(100vh-3.5rem)] grid-cols-1 bg-border md:grid-cols-[1fr_340px] md:gap-px">
       <div
-        className="relative h-[70vh] min-h-[60vh] md:h-full"
+        className="relative h-[46vh] min-h-[280px] md:h-full"
         onContextMenu={openContextMenu}
       >
         <CanvasStage onApplyDetections={runApplyDetections} />
         {!image && <Dropzone onFile={importFile} />}
       </div>
 
-      <aside className="flex flex-col gap-5 overflow-y-auto bg-background p-4">
+      <aside className="flex flex-col gap-5 overflow-y-auto bg-background p-4 pb-8">
         {image ? (
           <>
             <Toolbar onAuto={runAuto} onDetect={runDetect} onReplace={openPicker} />
