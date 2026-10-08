@@ -5,6 +5,7 @@ import { useEditor } from "@/lib/bg/store";
 import { applyRefine } from "@/lib/bg/mask";
 import { composite, type Background } from "@/lib/bg/compositor";
 import { strokeSegment } from "@/lib/bg/mask";
+import { Button } from "@/components/ui/button";
 
 interface View {
   scale: number;
@@ -279,10 +280,10 @@ export default function CanvasStage() {
   const cursor = tool === "pan" ? "grab" : tool === "keep" || tool === "remove" ? "none" : "default";
 
   return (
-    <div className="stageWrap checker" ref={wrapRef}>
+    <div className="checker absolute inset-0 overflow-hidden" ref={wrapRef}>
       <canvas
         ref={canvasRef}
-        className="canvas"
+        className="absolute inset-0 h-full w-full touch-none"
         style={{ cursor }}
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
@@ -313,22 +314,29 @@ function StageStatus({ onFit }: { onFit: () => void }) {
   return (
     <>
       {busy && (
-        <div className="progress" role="status" aria-live="polite">
-          <div className="bar">
-            <div style={{ width: `${Math.round(progress * 100)}%` }} />
+        <div
+          className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-3 bg-background/80 backdrop-blur-sm"
+          role="status"
+          aria-live="polite"
+        >
+          <div className="h-2 w-60 overflow-hidden rounded-full bg-muted">
+            <div
+              className="h-full bg-primary transition-[width] duration-200"
+              style={{ width: `${Math.round(progress * 100)}%` }}
+            />
           </div>
-          <div>{label || "Working…"}</div>
+          <div className="text-sm text-muted-foreground">{label || "Working…"}</div>
         </div>
       )}
       {image && (
-        <div className="statusbar">
-          <span>
+        <div className="absolute inset-x-0 bottom-0 flex items-center gap-3 border-t bg-background/90 px-3 py-2 text-xs text-muted-foreground backdrop-blur">
+          <span className="tabular-nums">
             {image.width}×{image.height}px
           </span>
-          <button className="btn" style={{ padding: "0.2rem 0.5rem" }} onClick={onFit}>
+          <Button variant="outline" size="sm" className="h-6 px-2 text-xs" onClick={onFit}>
             Fit
-          </button>
-          <span style={{ marginLeft: "auto" }}>Scroll to zoom · Space-drag to pan</span>
+          </Button>
+          <span className="ml-auto hidden sm:inline">Scroll to zoom · Space-drag to pan</span>
         </div>
       )}
     </>
