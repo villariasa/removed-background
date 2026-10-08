@@ -1,12 +1,6 @@
 # Remove Background
 
-> **A fast, private, 100% in-browser AI background removal tool — no account, zero uploads, runs entirely on your device.**
-
-[![Privacy: 100% Client-Side](https://img.shields.io/badge/Privacy-100%25%20Client--Side-success)](#security)
-[![Acceleration: WebGPU](https://img.shields.io/badge/Accelerated-WebGPU-blue)](#stack)
-[![Models: RMBG & SAM](https://img.shields.io/badge/Models-RMBG%20%2F%20MobileSAM-orange)](#stack)
-
-One-click AI background removal **plus** interactive manual refinement ("shade to keep / shade to remove" brush, edge tuning, and smart point selection) — all executed locally in the browser with zero server roundtrips.
+A fast, **private**, 100% in-browser AI background removal tool. One-click AI removal **plus** manual refinement ("shade to keep / shade to remove" brush, edge tuning, and smart point selection) — no account, zero uploads, runs entirely on your device.
 
 > **Status:** Planning. The full technical spec lives in
 > **[`BACKGROUND_REMOVER_PLAN.md`](./BACKGROUND_REMOVER_PLAN.md)** — read it before writing code.
