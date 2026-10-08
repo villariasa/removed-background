@@ -10,16 +10,31 @@ const modelHost =
   process.env.NEXT_PUBLIC_BG_MODEL_HOST || "https://huggingface.co";
 
 // Remote model + WASM-backend hosts the browser is allowed to reach.
+// `*.cdn.hf.co` covers HF's newer "Xet" storage backend — large files on
+// huggingface.co redirect to a region-specific subdomain under it (observed:
+// us.aws.cdn.hf.co), and that subdomain isn't enumerable in advance.
 const remoteConnect = remoteModels
-  ? [modelHost, "https://cdn.jsdelivr.net", "https://cdn-lfs.huggingface.co", "https://cdn-lfs-us-1.huggingface.co"]
+  ? [
+      modelHost,
+      "https://cdn.jsdelivr.net",
+      "https://cdn-lfs.huggingface.co",
+      "https://cdn-lfs-us-1.huggingface.co",
+      "https://*.cdn.hf.co",
+    ]
   : [];
 
-// `'unsafe-eval'` is only needed by the Next.js dev runtime; production relies
-// solely on `'wasm-unsafe-eval'` for the WASM backend.
+// `'unsafe-inline'` is required even in production: Next.js's static export
+// embeds per-page inline <script> tags carrying the serialized RSC/hydration
+// payload, and there's no server to inject nonces for a purely static site.
+// `'unsafe-eval'` is only needed by the Next.js dev runtime. jsdelivr is
+// needed here (not just connect-src) because onnxruntime-web's wasm loader
+// is a dynamically `import()`-ed .mjs module, which script-src governs.
 const scriptSrc = [
   "'self'",
+  "'unsafe-inline'",
   "'wasm-unsafe-eval'",
-  ...(isDev ? ["'unsafe-eval'", "'unsafe-inline'"] : []),
+  ...(remoteModels ? ["https://cdn.jsdelivr.net"] : []),
+  ...(isDev ? ["'unsafe-eval'"] : []),
 ].join(" ");
 
 const csp = [
@@ -37,12 +52,13 @@ const csp = [
   .trim();
 
 // Security headers for the tool routes (plan §10.4 / §12.2).
-// COEP=credentialless enables cross-origin isolation (threaded WASM, WebGPU)
-// while still allowing cross-origin model fetches without CORP headers.
+// No Cross-Origin-Embedder-Policy: the WASM backend is pinned to
+// single-threaded (see ml.worker.ts), so cross-origin isolation /
+// SharedArrayBuffer is never needed — and enabling it is what previously
+// made onnxruntime-web opt into a pthread codepath that crashed under CSP.
 const securityHeaders = [
   { key: "Content-Security-Policy", value: csp },
   { key: "Cross-Origin-Opener-Policy", value: "same-origin" },
-  { key: "Cross-Origin-Embedder-Policy", value: "credentialless" },
   { key: "Referrer-Policy", value: "no-referrer" },
   { key: "X-Content-Type-Options", value: "nosniff" },
   {
