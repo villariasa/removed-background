@@ -1,10 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { useEditor } from "@/lib/bg/store";
-import { applyRefine, contentBounds } from "@/lib/bg/mask";
-import { exportBlob, type Background } from "@/lib/bg/compositor";
-import { sanitizeFilename } from "@/lib/bg/image";
+import { downloadCurrent } from "@/lib/bg/download";
 import { Button } from "@/components/ui/button";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { PanelTitle } from "./Field";
@@ -17,37 +14,9 @@ export default function ExportBar() {
   const [busy, setBusy] = useState(false);
 
   async function download() {
-    const st = useEditor.getState();
-    const img = st.image;
-    const base = st.baseMask;
-    if (!img || !base) return;
     setBusy(true);
     try {
-      const eff = applyRefine(base, img.width, img.height, st.refine);
-      const blob = await exportBlob(
-        {
-          source: img.imageData,
-          mask: eff,
-          width: img.width,
-          height: img.height,
-          background: st.background as Background,
-          spill: st.refine.spill,
-        },
-        {
-          format,
-          maxSize: size,
-          trim,
-          trimBounds: trim ? contentBounds(eff, img.width, img.height) : null,
-        },
-      );
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `${sanitizeFilename(img.name)}-cutout.${format}`;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      setTimeout(() => URL.revokeObjectURL(url), 2000);
+      await downloadCurrent({ format, maxSize: size, trim });
     } finally {
       setBusy(false);
     }
