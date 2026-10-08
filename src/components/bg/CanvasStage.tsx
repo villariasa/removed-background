@@ -405,6 +405,8 @@ function StageStatus({ onFit }: { onFit: () => void }) {
   const progress = useEditor((s) => s.progress);
   const label = useEditor((s) => s.progressLabel);
   const image = useEditor((s) => s.image);
+  const error = useEditor((s) => s.error);
+  const setError = useEditor((s) => s.setError);
 
   const busy = status === "loading-model" || status === "processing";
   const pct = Math.round(progress * 100);
@@ -412,6 +414,25 @@ function StageStatus({ onFit }: { onFit: () => void }) {
 
   return (
     <>
+      {/* Errors from a failed AI run etc. — Dropzone only shows its own error
+          box while no image is loaded, so this is the only error surface
+          once an image exists. Without it, a failed runAuto() silently
+          reverts to "ready" with zero visible feedback. */}
+      {!busy && error && image && (
+        <div
+          role="alert"
+          className="absolute inset-x-3 top-3 z-20 flex items-start gap-2 rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive shadow-sm"
+        >
+          <span className="flex-1">{error}</span>
+          <button
+            onClick={() => setError(null)}
+            aria-label="Dismiss"
+            className="shrink-0 text-destructive/70 hover:text-destructive"
+          >
+            ✕
+          </button>
+        </div>
+      )}
       {busy && (
         <div
           className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-4 bg-background/85 backdrop-blur-sm"
