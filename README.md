@@ -16,8 +16,10 @@ npm run dev                  # http://localhost:3000/tools/background-remover
 # or: node node_modules/next/dist/bin/next dev   (if bin symlinks weren't created)
 ```
 
-The first background removal downloads the RMBG-1.4 weights (~44 MB) from the HuggingFace
-Hub once, then caches them for instant repeat use. Nothing else leaves your device.
+The first background removal downloads the RMBG-1.4 weights (~44 MB, quantized) from the
+HuggingFace Hub once, then caches them for instant repeat use. "Detect objects" downloads two
+more small models on first use (YOLOS-tiny ~10 MB, SlimSAM ~14 MB). Nothing else leaves your
+device.
 
 ## Project layout
 
@@ -34,8 +36,19 @@ src/lib/bg/worker/                  # ML worker (Transformers.js + RMBG-1.4) + R
 - **UI:** shadcn/ui + Tailwind CSS v4 (clean white, formal aesthetic).
 - **Canvas:** a hand-rolled Canvas 2D stage (pan/zoom, soft brush stamping) rather than Konva —
   fewer dependencies and full control of the compositing hot path; can graduate to WebGL later.
-- **Not yet built (Phase 4+):** MobileSAM click-to-select, edge-aware "magnetic" brush,
-  BiRefNet upgrade. The single-mask architecture leaves room to drop these in.
+- **Object detection:** YOLOS-tiny finds distinct objects; selected boxes are segmented by
+  SlimSAM using a **point prompt** at each box's center (the published ONNX decoder graph
+  only exposes point/label inputs — `input_boxes` is accepted by the JS API but silently
+  dropped by the session, so true box-conditioned segmentation isn't actually available with
+  this export). Detector output gets greedy NMS (IoU > 0.5) since `post_process_object_detection`
+  does no deduplication — without it, overlapping duplicate boxes make some unclickable.
+- **WASM is pinned to single-threaded** (`numThreads = 1`) deliberately: threaded WASM needs
+  `SharedArrayBuffer`, which requires `COOP`+`COEP` headers, and enabling `COEP` makes
+  onnxruntime-web opt into a pthread codepath that throws under this project's CSP. No COEP
+  header is sent at all.
+- **Not yet built:** edge-aware "magnetic" brush, BiRefNet upgrade, true box/multi-point SAM
+  prompting (would need a different SAM ONNX export). The single-mask architecture leaves
+  room to drop these in.
 - **`npm audit`:** the remaining advisories are **Node-only** transitive deps of
   Transformers.js (`sharp`, `onnxruntime-node`, `global-agent`) that are never bundled into the
   browser (the client uses `onnxruntime-web`), plus a build-time-only postcss advisory inside
@@ -46,12 +59,16 @@ src/lib/bg/worker/                  # ML worker (Transformers.js + RMBG-1.4) + R
 ## What it does
 
 - **Easy mode** — drop an image, AI removes the background in seconds.
+- **Detect objects** — find distinct subjects (YOLOS), click boxes to pick which to keep,
+  Apply to segment just those (SlimSAM) and replace the mask.
 - **Advanced mode** — refine the result:
   - **Brush** areas to keep or exclude (soft brush, size/feather/flow, undo/redo).
-  - **Click** a subject to auto-select it (point-prompt AI).
+  - **Magic wand** — click a region to select by color similarity, snapping to edges.
+  - **Lasso** — drag a freeform outline to select any shape.
   - Tune **edges** (feather, smooth, grow/shrink, color de-fringe).
   - Choose a **background**: transparent / solid color / image / blurred original.
 - **Export** transparent PNG or WebP, with trim-to-content and size presets.
+- **Right-click** the canvas for a context menu of quick actions.
 
 **Core promise:** by default, images never leave your device — everything runs in the browser.
 
@@ -59,13 +76,13 @@ src/lib/bg/worker/                  # ML worker (Transformers.js + RMBG-1.4) + R
 
 | Concern | Choice |
 |---|---|
-| Framework | Next.js (App Router), client-only tool route |
-| Auto removal | Transformers.js — RMBG-1.4 (→ BiRefNet), **WebGPU** accelerated |
-| Click-to-select | MobileSAM via `onnxruntime-web` |
-| Canvas / brush | Konva + react-konva |
+| Framework | Next.js (App Router), static export, client-only tool route |
+| Auto removal | Transformers.js — RMBG-1.4, WebGPU accelerated (q8 quantized on CPU/WASM) |
+| Object detection | Transformers.js — YOLOS-tiny, with NMS dedup |
+| Pick-to-segment | Transformers.js — SlimSAM (point-prompted at each box's center) |
+| Canvas / brush | Hand-rolled Canvas 2D (pan/zoom, brush/wand/lasso, detection overlay) |
 | State / history | Zustand |
-| Off-thread work | Web Worker + Comlink |
-| Fast MVP shortcut | `@imgly/background-removal` |
+| Off-thread work | A single Web Worker (plain `postMessage` RPC) |
 
 See plan §2 for rationale and alternatives (incl. an optional server path).
 
@@ -80,9 +97,10 @@ See plan §2 for rationale and alternatives (incl. an optional server path).
 
 ## Security
 
-Images never leave the device on the default path. Hardened with CSP + COOP/COEP, strict input
-validation (magic-byte checks, size/dimension caps, bomb rejection), filename sanitization, EXIF
-stripping, self-hosted models with integrity hashes, and Worker sandboxing.
+Images never leave the device on the default path. Hardened with CSP (no `COEP` — WASM is
+pinned single-threaded, so cross-origin isolation is never needed) + `COOP: same-origin`,
+strict input validation (magic-byte checks, size/dimension caps, bomb rejection), filename
+sanitization, EXIF stripping, and Worker sandboxing.
 Full detail + ship-gate checklist in plan §12.
 
 ## Roadmap
