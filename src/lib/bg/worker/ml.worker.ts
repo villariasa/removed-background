@@ -42,6 +42,80 @@ function post(msg: Out, transfer?: Transferable[]) {
   (self as DedicatedWorkerGlobalScope).postMessage(msg, transfer ?? []);
 }
 
+// Short, human filenames instead of the full HF repo-relative path.
+function shortName(file?: string): string {
+  if (!file) return "model file";
+  const base = file.split("/").pop() || file;
+  return base;
+}
+
+/**
+ * Transformers.js reports per-file download progress (multiple files: the
+ * ONNX weights, config.json, preprocessor config, …). Track each file's
+ * loaded/total so we can report one smooth, weighted overall percentage
+ * instead of the progress resetting to 0% every time a new file starts.
+ */
+function makeProgressTracker(id: number) {
+  const files = new Map<string, { loaded: number; total: number; done: boolean }>();
+
+  function emit(label: string) {
+    let loaded = 0;
+    let total = 0;
+    for (const f of files.values()) {
+      loaded += f.done ? f.total : f.loaded;
+      total += f.total;
+    }
+    const progress = total > 0 ? Math.min(0.97, loaded / total) : 0;
+    post({ id, type: "progress", progress, label });
+  }
+
+  return (p: {
+    status?: string;
+    file?: string;
+    progress?: number;
+    loaded?: number;
+    total?: number;
+  }) => {
+    const key = p.file ?? "model";
+    switch (p.status) {
+      case "initiate":
+        files.set(key, { loaded: 0, total: p.total ?? 0, done: false });
+        emit(`Downloading ${shortName(p.file)}…`);
+        break;
+      case "progress": {
+        const f = files.get(key) ?? { loaded: 0, total: p.total ?? 0, done: false };
+        f.loaded = p.loaded ?? f.loaded;
+        if (p.total) f.total = p.total;
+        files.set(key, f);
+        const pct =
+          typeof p.progress === "number"
+            ? Math.round(p.progress)
+            : f.total
+              ? Math.round((f.loaded / f.total) * 100)
+              : undefined;
+        emit(
+          pct != null
+            ? `Downloading ${shortName(p.file)}… ${pct}%`
+            : `Downloading ${shortName(p.file)}…`,
+        );
+        break;
+      }
+      case "done": {
+        const f = files.get(key) ?? { loaded: 0, total: 0, done: false };
+        f.done = true;
+        files.set(key, f);
+        emit(
+          files.size && [...files.values()].every((v) => v.done)
+            ? "Loading model…"
+            : `Downloading ${shortName(p.file)}…`,
+        );
+        break;
+      }
+      // "ready" and other statuses carry no useful progress — ignored.
+    }
+  };
+}
+
 async function ensureModel(id: number) {
   if (model && processor) return;
 
@@ -49,37 +123,36 @@ async function ensureModel(id: number) {
   const hasWebGPU = typeof (self.navigator as Navigator & { gpu?: unknown }).gpu !== "undefined";
   device = hasWebGPU ? "webgpu" : "wasm";
 
-  const progress_callback = (p: { status?: string; progress?: number; file?: string }) => {
-    if (p.status === "progress" && typeof p.progress === "number") {
-      post({
-        id,
-        type: "progress",
-        progress: Math.min(0.99, p.progress / 100),
-        label: `Downloading model… ${Math.round(p.progress)}%`,
-      });
-    }
-  };
+  const progress_callback = makeProgressTracker(id);
 
   try {
     model = await AutoModel.from_pretrained(MODEL_ID, {
-      // fp16 is fine on WebGPU; WASM path uses fp32.
+      // fp16 on WebGPU; the 8-bit quantized ONNX export on WASM/CPU — both
+      // smaller to download and several times faster than fp32 on CPU.
       device,
-      dtype: device === "webgpu" ? "fp16" : "fp32",
+      dtype: device === "webgpu" ? "fp16" : "q8",
       progress_callback,
     });
   } catch (err) {
     // WebGPU init can fail on some drivers — retry on WASM.
     if (device === "webgpu") {
       device = "wasm";
+      post({ id, type: "progress", progress: 0, label: "Falling back to CPU (WASM)…" });
       model = await AutoModel.from_pretrained(MODEL_ID, {
         device: "wasm",
-        dtype: "fp32",
+        dtype: "q8",
         progress_callback,
       });
     } else {
       throw err;
     }
   }
+  post({
+    id,
+    type: "progress",
+    progress: 0.98,
+    label: `Loading processor (${device === "webgpu" ? "GPU" : "CPU"})…`,
+  });
   processor = await AutoProcessor.from_pretrained(MODEL_ID);
 }
 
@@ -118,9 +191,15 @@ self.onmessage = async (e: MessageEvent<In>) => {
     if (msg.type === "matte") {
       post({ id: msg.id, type: "progress", progress: 0, label: "Preparing model…" });
       await ensureModel(msg.id);
-      post({ id: msg.id, type: "progress", progress: 0.6, label: "Removing background…" });
+      post({
+        id: msg.id,
+        type: "progress",
+        progress: 0.6,
+        label: `Removing background (${device === "webgpu" ? "GPU" : "CPU"})…`,
+      });
 
       const matte = await runMatte(msg.data, msg.width, msg.height);
+      post({ id: msg.id, type: "progress", progress: 0.95, label: "Finalizing mask…" });
       // matte.data may be Uint8Array/Uint8ClampedArray, 1 channel.
       const buf = matte.data.buffer.slice(0) as ArrayBuffer;
       post(
