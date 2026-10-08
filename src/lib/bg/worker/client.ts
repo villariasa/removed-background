@@ -5,6 +5,7 @@
 // reused across calls.
 
 import type { Mask } from "../mask";
+import type { DetectedBox } from "./ml.worker";
 
 type ProgressCb = (progress: number, label: string) => void;
 
@@ -30,6 +31,7 @@ function getWorker(): Worker {
       message?: string;
       mask?: ArrayBuffer;
       device?: string;
+      boxes?: DetectedBox[];
     };
     const p = pending.get(msg.id);
     if (!p) return;
@@ -80,6 +82,49 @@ export async function autoMatte(
     { type: "matte", data: buf, width: imageData.width, height: imageData.height },
     [buf],
     onProgress,
+  );
+  return new Uint8ClampedArray(res.mask);
+}
+
+export type { DetectedBox };
+
+/** Run object detection (YOLOS) on an image; returns detected boxes + labels. */
+export async function detectObjects(
+  imageData: ImageData,
+  onProgress?: ProgressCb,
+): Promise<DetectedBox[]> {
+  const buf = imageData.data.buffer.slice(0);
+  const res = await call<{ boxes: DetectedBox[] }>(
+    { type: "detect", data: buf, width: imageData.width, height: imageData.height },
+    [buf],
+    onProgress,
+  );
+  return res.boxes;
+}
+
+/** Encode an image once for SAM so subsequent samSegment calls are cheap. */
+export async function samPrepare(
+  imageData: ImageData,
+  onProgress?: ProgressCb,
+): Promise<void> {
+  const buf = imageData.data.buffer.slice(0);
+  await call<Record<string, never>>(
+    { type: "samPrepare", data: buf, width: imageData.width, height: imageData.height },
+    [buf],
+    onProgress,
+  );
+}
+
+/** Segment the given boxes (point-prompted at each box's center) against the
+ * image prepared by the most recent samPrepare() call, unioned into one mask. */
+export async function samSegment(
+  boxes: DetectedBox[],
+  width: number,
+  height: number,
+): Promise<Mask> {
+  const res = await call<{ mask: ArrayBuffer }>(
+    { type: "samSegment", boxes, width, height },
+    [],
   );
   return new Uint8ClampedArray(res.mask);
 }
