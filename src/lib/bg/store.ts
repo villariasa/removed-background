@@ -31,6 +31,19 @@ export interface WandParams {
   contiguous: boolean;
 }
 
+export interface DetectedObject {
+  id: number;
+  label: string;
+  score: number;
+  x0: number;
+  y0: number;
+  x1: number;
+  y1: number;
+  selected: boolean;
+}
+
+export type DetectStatus = "idle" | "detecting" | "ready" | "segmenting";
+
 export type Status = "empty" | "loading-model" | "processing" | "ready";
 
 interface LoadedImage {
@@ -58,6 +71,10 @@ interface EditorState {
   maskVersion: number; // bumps whenever baseMask mutates in place
   hasAuto: boolean; // whether an AI matte has ever been produced
 
+  // object detection + pick-to-segment (plan §4.2, point-prompted SAM)
+  detectStatus: DetectStatus;
+  detections: DetectedObject[];
+
   // history
   history: Mask[];
   historyIndex: number;
@@ -84,6 +101,12 @@ interface EditorState {
   resetToAuto: () => void; // re-run handled by caller; this resets refine/history
   canUndo: () => boolean;
   canRedo: () => boolean;
+
+  setDetectStatus: (s: DetectStatus) => void;
+  setDetections: (boxes: Omit<DetectedObject, "id" | "selected">[]) => void;
+  toggleDetection: (id: number) => void;
+  selectAllDetections: (selected: boolean) => void;
+  clearDetections: () => void;
 }
 
 export const useEditor = create<EditorState>((set, get) => ({
@@ -104,6 +127,8 @@ export const useEditor = create<EditorState>((set, get) => ({
   error: null,
   maskVersion: 0,
   hasAuto: false,
+  detectStatus: "idle",
+  detections: [],
   history: [],
   historyIndex: -1,
 
@@ -116,6 +141,8 @@ export const useEditor = create<EditorState>((set, get) => ({
       refine: { feather: 0, grow: 0, threshold: 0, spill: 0 },
       background: { kind: "transparent" },
       hasAuto: false,
+      detectStatus: "idle",
+      detections: [],
       history: [],
       historyIndex: -1,
       maskVersion: get().maskVersion + 1,
@@ -214,4 +241,22 @@ export const useEditor = create<EditorState>((set, get) => ({
 
   canUndo: () => get().historyIndex > 0,
   canRedo: () => get().historyIndex < get().history.length - 1,
+
+  setDetectStatus: (detectStatus) => set({ detectStatus }),
+
+  setDetections: (boxes) =>
+    set({
+      detections: boxes.map((b, i) => ({ ...b, id: i, selected: true })),
+      detectStatus: "ready",
+    }),
+
+  toggleDetection: (id) =>
+    set((s) => ({
+      detections: s.detections.map((d) => (d.id === id ? { ...d, selected: !d.selected } : d)),
+    })),
+
+  selectAllDetections: (selected) =>
+    set((s) => ({ detections: s.detections.map((d) => ({ ...d, selected })) })),
+
+  clearDetections: () => set({ detections: [], detectStatus: "idle" }),
 }));
