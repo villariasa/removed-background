@@ -65,6 +65,13 @@ export default function CanvasStage({
   const lassoActive = useRef(false);
   const lassoPoints = useRef<Point[]>([]);
 
+  // Pinch-to-zoom / two-finger pan — the only way to zoom on a touchscreen
+  // (there's no wheel event). Tracked separately from the single-pointer
+  // brush/pan/lasso logic below; a second touch coming down mid-gesture
+  // cancels whatever the first touch was doing and takes over.
+  const activeTouches = useRef<Map<number, { x: number; y: number }>>(new Map());
+  const pinch = useRef<{ dist: number; midX: number; midY: number } | null>(null);
+
   // (Re)build the offscreen image-resolution composite whenever the mask,
   // refine params, background, or image changes.
   const buildComposite = useCallback(() => {
@@ -231,10 +238,47 @@ export default function CanvasStage({
     return { x: (sx - v.ox) / v.scale, y: (sy - v.oy) / v.scale, sx, sy };
   }
 
+  function pinchGeometry(): { dist: number; midX: number; midY: number } | null {
+    const pts = [...activeTouches.current.values()];
+    if (pts.length < 2) return null;
+    const [a, b] = pts;
+    return {
+      dist: Math.hypot(a.x - b.x, a.y - b.y),
+      midX: (a.x + b.x) / 2,
+      midY: (a.y + b.y) / 2,
+    };
+  }
+
+  function cancelSinglePointerGestures() {
+    if (drawing.current) {
+      drawing.current = false;
+      lastImgPt.current = null;
+    }
+    if (lassoActive.current) {
+      lassoActive.current = false;
+      lassoPoints.current = [];
+    }
+    panning.current = false;
+    lastPan.current = null;
+  }
+
   const onPointerDown = (e: React.PointerEvent) => {
     // Right-click is reserved for the app's context menu — never start a
     // stroke/selection from it.
     if (e.button === 2) return;
+
+    if (e.pointerType === "touch") {
+      try {
+        (e.target as Element).setPointerCapture(e.pointerId);
+      } catch {}
+      activeTouches.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      if (activeTouches.current.size === 2) {
+        cancelSinglePointerGestures();
+        pinch.current = pinchGeometry();
+        return;
+      }
+      if (activeTouches.current.size > 2) return; // ignore a 3rd+ finger
+    }
 
     const t = useEditor.getState().tool;
     (e.target as Element).setPointerCapture(e.pointerId);
@@ -287,6 +331,32 @@ export default function CanvasStage({
   }
 
   const onPointerMove = (e: React.PointerEvent) => {
+    if (e.pointerType === "touch" && activeTouches.current.has(e.pointerId)) {
+      activeTouches.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      if (activeTouches.current.size >= 2) {
+        const next = pinchGeometry();
+        if (next && pinch.current) {
+          const v = viewRef.current;
+          const prev = pinch.current;
+          const factor = prev.dist > 0 ? next.dist / prev.dist : 1;
+          const newScale = Math.max(0.05, Math.min(40, v.scale * factor));
+          // zoom around the pinch midpoint, then pan by how much the
+          // midpoint itself moved (two-finger drag pans).
+          const rect = canvasRef.current!.getBoundingClientRect();
+          const sx = next.midX - rect.left;
+          const sy = next.midY - rect.top;
+          v.ox = sx - (sx - v.ox) * (newScale / v.scale);
+          v.oy = sy - (sy - v.oy) * (newScale / v.scale);
+          v.scale = newScale;
+          v.ox += next.midX - prev.midX;
+          v.oy += next.midY - prev.midY;
+          scheduleePaint();
+        }
+        pinch.current = next;
+        return;
+      }
+    }
+
     const p = toImage(e.clientX, e.clientY);
     pointer.current = { x: p.sx, y: p.sy, inside: true };
 
@@ -310,6 +380,18 @@ export default function CanvasStage({
   };
 
   const endStroke = (e: React.PointerEvent) => {
+    if (e.pointerType === "touch") {
+      activeTouches.current.delete(e.pointerId);
+      if (activeTouches.current.size < 2) pinch.current = null;
+      if (activeTouches.current.size > 0) {
+        // A finger lifted mid-pinch but another is still down — don't let
+        // the remaining single touch fall through into drawing/panning.
+        try {
+          (e.target as Element).releasePointerCapture(e.pointerId);
+        } catch {}
+        return;
+      }
+    }
     if (drawing.current) {
       drawing.current = false;
       lastImgPt.current = null;
