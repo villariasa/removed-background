@@ -11,6 +11,8 @@ import {
   identifyObjects,
 } from "@/lib/bg/worker/client";
 import { downloadCurrent } from "@/lib/bg/download";
+import { cn } from "@/lib/utils";
+import { useCoarsePointer } from "@/lib/useCoarsePointer";
 import CanvasStage from "./CanvasStage";
 import Dropzone from "./Dropzone";
 import Toolbar from "./Toolbar";
@@ -42,6 +44,10 @@ import {
 export default function Editor() {
   const image = useEditor((s) => s.image);
   const [showHelp, setShowHelp] = useState(false);
+
+  // The mobile-optimized layout (stacked, shorter canvas) is gated on touch
+  // capability, not just viewport width — see useCoarsePointer.
+  const touchLayout = useCoarsePointer();
   const [menu, setMenu] = useState<{ x: number; y: number; items: ContextMenuItem[] } | null>(
     null,
   );
@@ -352,9 +358,14 @@ export default function Editor() {
   }, []);
 
   return (
-    <div className="grid h-[calc(100vh-3.5rem)] grid-cols-1 bg-border md:grid-cols-[1fr_340px] md:gap-px">
+    <div
+      className={cn(
+        "grid h-[calc(100vh-3.5rem)] grid-cols-1 bg-border",
+        !touchLayout && "md:grid-cols-[1fr_340px] md:gap-px",
+      )}
+    >
       <div
-        className="relative h-[46vh] min-h-[280px] md:h-full"
+        className={cn("relative h-[46vh] min-h-[280px]", !touchLayout && "md:h-full")}
         onContextMenu={openContextMenu}
       >
         <CanvasStage onApplyDetections={runApplyDetections} onIdentifyObjects={runIdentify} />
