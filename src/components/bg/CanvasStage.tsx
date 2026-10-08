@@ -17,8 +17,10 @@ interface View {
 
 export default function CanvasStage({
   onApplyDetections,
+  onIdentifyObjects,
 }: {
   onApplyDetections: () => void;
+  onIdentifyObjects: () => void;
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
@@ -518,16 +520,25 @@ export default function CanvasStage({
                   ? "border-primary bg-primary/10"
                   : "border-muted-foreground/40 bg-transparent"
               }`}
-              title={`${d.label} (${Math.round(d.score * 100)}%) — click to ${d.selected ? "exclude" : "include"}`}
+              title={`${d.label} (${Math.round(d.score * 100)}%)${
+                d.altLabel ? ` — possibly: ${d.altLabel} (${Math.round((d.altScore ?? 0) * 100)}%)` : ""
+              } — click to ${d.selected ? "exclude" : "include"}`}
             >
               <span
-                className={`-translate-y-full rounded-sm px-1.5 py-0.5 text-xs font-medium whitespace-nowrap ${
+                className={`-translate-y-full flex flex-col items-start gap-0.5 rounded-sm px-1.5 py-0.5 text-xs font-medium whitespace-nowrap ${
                   d.selected
                     ? "bg-primary text-primary-foreground"
                     : "bg-muted-foreground/70 text-background"
                 }`}
               >
-                {d.label} {Math.round(d.score * 100)}%
+                <span>
+                  {d.label} {Math.round(d.score * 100)}%
+                </span>
+                {d.altLabel && (
+                  <span className="text-[10px] font-normal opacity-80">
+                    possibly: {d.altLabel} {Math.round((d.altScore ?? 0) * 100)}%
+                  </span>
+                )}
               </span>
             </button>
           ))}
@@ -535,12 +546,18 @@ export default function CanvasStage({
       )}
 
       <StageStatus onFit={fit} />
-      <DetectionActionBar onApply={onApplyDetections} />
+      <DetectionActionBar onApply={onApplyDetections} onIdentify={onIdentifyObjects} />
     </div>
   );
 }
 
-function DetectionActionBar({ onApply }: { onApply: () => void }) {
+function DetectionActionBar({
+  onApply,
+  onIdentify,
+}: {
+  onApply: () => void;
+  onIdentify: () => void;
+}) {
   const detections = useEditor((s) => s.detections);
   const detectStatus = useEditor((s) => s.detectStatus);
   const toggleAll = useEditor((s) => s.selectAllDetections);
@@ -548,7 +565,8 @@ function DetectionActionBar({ onApply }: { onApply: () => void }) {
 
   if (detections.length === 0) return null;
   const selectedCount = detections.filter((d) => d.selected).length;
-  const busy = detectStatus === "segmenting";
+  const busy = detectStatus === "segmenting" || detectStatus === "identifying";
+  const alreadyIdentified = detections.some((d) => d.altLabel !== undefined);
 
   return (
     <div className="absolute top-3 right-3 left-3 z-20 flex flex-wrap items-center justify-center gap-1.5 rounded-lg border bg-popover/95 p-1.5 text-sm shadow-md backdrop-blur md:left-auto md:justify-end md:gap-2 md:p-2">
@@ -563,6 +581,16 @@ function DetectionActionBar({ onApply }: { onApply: () => void }) {
         disabled={busy}
       >
         All
+      </Button>
+      <Button
+        variant="outline"
+        size="sm"
+        className="h-9 px-3 text-sm md:h-7 md:px-2 md:text-xs"
+        onClick={onIdentify}
+        disabled={busy || alreadyIdentified}
+        title="Run a second, larger model (~150MB download) to suggest names for objects outside the usual 91 categories. Shown as a 'possibly:' hint — not always correct."
+      >
+        {detectStatus === "identifying" ? "Identifying…" : "Identify unclear objects"}
       </Button>
       <Button
         variant="outline"
@@ -604,7 +632,8 @@ function stageFromLabel(label: string): 0 | 1 | 2 {
     l.includes("finalizing") ||
     l.includes("detecting") ||
     l.includes("analyzing") ||
-    l.includes("segmenting")
+    l.includes("segmenting") ||
+    l.includes("identifying")
   )
     return 2;
   if (l.includes("loading") || l.includes("falling back")) return 1;
@@ -689,8 +718,9 @@ function StageStatus({ onFit }: { onFit: () => void }) {
 
           {stage === 0 && (
             <p className="max-w-xs text-center text-xs text-muted-foreground/70">
-              First use of each tool downloads its model (a few MB to ~44&nbsp;MB) —
-              cached after that.
+              First use of each tool downloads its model (a few MB, up to
+              ~150&nbsp;MB for &quot;Identify unclear objects&quot;) — cached
+              after that.
             </p>
           )}
         </div>
