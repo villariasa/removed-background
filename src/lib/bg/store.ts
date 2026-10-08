@@ -40,9 +40,14 @@ export interface DetectedObject {
   x1: number;
   y1: number;
   selected: boolean;
+  // Opt-in CLIP open-vocabulary naming ("Identify unclear objects") — set
+  // only when it disagrees with `label` above a confidence floor. Shown as
+  // a secondary "possibly: X" hint, never replaces the primary label.
+  altLabel?: string;
+  altScore?: number;
 }
 
-export type DetectStatus = "idle" | "detecting" | "ready" | "segmenting";
+export type DetectStatus = "idle" | "detecting" | "ready" | "segmenting" | "identifying";
 
 export type Status = "empty" | "loading-model" | "processing" | "ready";
 
@@ -107,6 +112,7 @@ interface EditorState {
   toggleDetection: (id: number) => void;
   selectAllDetections: (selected: boolean) => void;
   clearDetections: () => void;
+  applyIdentifyResults: (boxes: Omit<DetectedObject, "id" | "selected">[]) => void;
 }
 
 export const useEditor = create<EditorState>((set, get) => ({
@@ -259,4 +265,16 @@ export const useEditor = create<EditorState>((set, get) => ({
     set((s) => ({ detections: s.detections.map((d) => ({ ...d, selected })) })),
 
   clearDetections: () => set({ detections: [], detectStatus: "idle" }),
+
+  // Positional merge: the caller must pass get().detections (in the same
+  // order) to identifyObjects() so the returned array lines up index-for-index.
+  applyIdentifyResults: (boxes) =>
+    set((s) => ({
+      detections: s.detections.map((d, i) => ({
+        ...d,
+        altLabel: boxes[i]?.altLabel,
+        altScore: boxes[i]?.altScore,
+      })),
+      detectStatus: "ready",
+    })),
 }));
