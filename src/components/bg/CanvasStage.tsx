@@ -8,6 +8,8 @@ import { magicWandSelect } from "@/lib/bg/magicWand";
 import { polygonSelect, simplifyPath, type Point } from "@/lib/bg/lasso";
 import { Button } from "@/components/ui/button";
 import { Loader2 } from "lucide-react";
+import { cn } from "@/lib/utils";
+import { useCoarsePointer } from "@/lib/useCoarsePointer";
 
 interface View {
   scale: number;
@@ -563,59 +565,44 @@ function DetectionActionBar({
   const toggleAll = useEditor((s) => s.selectAllDetections);
   const clear = useEditor((s) => s.clearDetections);
 
+  const touch = useCoarsePointer();
+
   if (detections.length === 0) return null;
   const selectedCount = detections.filter((d) => d.selected).length;
   const busy = detectStatus === "segmenting" || detectStatus === "identifying";
   const alreadyIdentified = detections.some((d) => d.altLabel !== undefined);
+  const btnSize = touch ? "h-9 px-3 text-sm" : "h-7 px-2 text-xs";
 
   return (
-    <div className="absolute top-3 right-3 left-3 z-20 flex flex-wrap items-center justify-center gap-1.5 rounded-lg border bg-popover/95 p-1.5 text-sm shadow-md backdrop-blur md:left-auto md:justify-end md:gap-2 md:p-2">
+    <div
+      className={cn(
+        "absolute top-3 right-3 left-3 z-20 flex flex-wrap items-center justify-center gap-1.5 rounded-lg border bg-popover/95 p-1.5 text-sm shadow-md backdrop-blur",
+        !touch && "left-auto justify-end gap-2 p-2",
+      )}
+    >
       <span className="px-1 text-xs text-muted-foreground">
         {selectedCount}/{detections.length} selected
       </span>
-      <Button
-        variant="outline"
-        size="sm"
-        className="h-9 px-3 text-sm md:h-7 md:px-2 md:text-xs"
-        onClick={() => toggleAll(true)}
-        disabled={busy}
-      >
+      <Button variant="outline" size="sm" className={btnSize} onClick={() => toggleAll(true)} disabled={busy}>
         All
       </Button>
       <Button
         variant="outline"
         size="sm"
-        className="h-9 px-3 text-sm md:h-7 md:px-2 md:text-xs"
+        className={btnSize}
         onClick={onIdentify}
         disabled={busy || alreadyIdentified}
         title="Run a second, larger model (~150MB download) to suggest names for objects outside the usual 91 categories. Shown as a 'possibly:' hint — not always correct."
       >
         {detectStatus === "identifying" ? "Identifying…" : "Identify unclear objects"}
       </Button>
-      <Button
-        variant="outline"
-        size="sm"
-        className="h-9 px-3 text-sm md:h-7 md:px-2 md:text-xs"
-        onClick={() => toggleAll(false)}
-        disabled={busy}
-      >
+      <Button variant="outline" size="sm" className={btnSize} onClick={() => toggleAll(false)} disabled={busy}>
         None
       </Button>
-      <Button
-        variant="ghost"
-        size="sm"
-        className="h-9 px-3 text-sm md:h-7 md:px-2 md:text-xs"
-        onClick={clear}
-        disabled={busy}
-      >
+      <Button variant="ghost" size="sm" className={btnSize} onClick={clear} disabled={busy}>
         Cancel
       </Button>
-      <Button
-        size="sm"
-        className="h-9 px-3 text-sm md:h-7 md:px-2 md:text-xs"
-        onClick={onApply}
-        disabled={busy || selectedCount === 0}
-      >
+      <Button size="sm" className={btnSize} onClick={onApply} disabled={busy || selectedCount === 0}>
         {busy ? "Applying…" : `Apply (${selectedCount})`}
       </Button>
     </div>
@@ -649,6 +636,7 @@ function StageStatus({ onFit }: { onFit: () => void }) {
   const image = useEditor((s) => s.image);
   const error = useEditor((s) => s.error);
   const setError = useEditor((s) => s.setError);
+  const touch = useCoarsePointer();
 
   const busy = status === "loading-model" || status === "processing";
   const pct = Math.round(progress * 100);
@@ -733,7 +721,7 @@ function StageStatus({ onFit }: { onFit: () => void }) {
           <Button
             variant="outline"
             size="sm"
-            className="h-8 px-3 text-xs md:h-6 md:px-2"
+            className={touch ? "h-8 px-3 text-xs" : "h-6 px-2 text-xs"}
             onClick={onFit}
           >
             Fit
