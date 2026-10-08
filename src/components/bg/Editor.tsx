@@ -3,7 +3,13 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useEditor } from "@/lib/bg/store";
 import { bitmapToImageData, validateAndDecode } from "@/lib/bg/image";
-import { autoMatte, detectObjects, samPrepare, samSegment } from "@/lib/bg/worker/client";
+import {
+  autoMatte,
+  detectObjects,
+  samPrepare,
+  samSegment,
+  identifyObjects,
+} from "@/lib/bg/worker/client";
 import { downloadCurrent } from "@/lib/bg/download";
 import CanvasStage from "./CanvasStage";
 import Dropzone from "./Dropzone";
@@ -128,6 +134,32 @@ export default function Editor() {
       );
     } finally {
       useEditor.getState().setDetectStatus("idle");
+      useEditor.getState().setStatus("ready");
+    }
+  }, []);
+
+  const runIdentify = useCallback(async () => {
+    const st = useEditor.getState();
+    const img = st.image;
+    if (!img || st.detections.length === 0) return;
+
+    st.setError(null);
+    st.setDetectStatus("identifying");
+    st.setStatus("loading-model");
+    st.setProgress(0, "Preparing naming model…");
+    try {
+      const boxesSnapshot = st.detections;
+      const updated = await identifyObjects(img.imageData, boxesSnapshot, (p, label) => {
+        useEditor.getState().setProgress(p, label);
+      });
+      useEditor.getState().applyIdentifyResults(updated);
+      useEditor.getState().setProgress(1, "Done");
+    } catch (err) {
+      useEditor.getState().setError(
+        err instanceof Error ? err.message : "Object identification failed.",
+      );
+      useEditor.getState().setDetectStatus("ready");
+    } finally {
       useEditor.getState().setStatus("ready");
     }
   }, []);
@@ -325,7 +357,7 @@ export default function Editor() {
         className="relative h-[46vh] min-h-[280px] md:h-full"
         onContextMenu={openContextMenu}
       >
-        <CanvasStage onApplyDetections={runApplyDetections} />
+        <CanvasStage onApplyDetections={runApplyDetections} onIdentifyObjects={runIdentify} />
         {!image && <Dropzone onFile={importFile} />}
       </div>
 
