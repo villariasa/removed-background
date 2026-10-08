@@ -6,12 +6,16 @@
 
 import {
   AutoModel,
+  AutoModelForObjectDetection,
   AutoProcessor,
+  SamModel,
   RawImage,
   env,
   type PreTrainedModel,
   type Processor,
+  type Tensor,
 } from "@huggingface/transformers";
+import { nonMaxSuppression } from "../nms";
 
 // Remote (HF Hub) vs self-hosted weights. Build-time inlined (plan §10.5).
 const REMOTE = process.env.NEXT_PUBLIC_BG_REMOTE_MODELS !== "false";
@@ -45,14 +49,47 @@ let model: PreTrainedModel | null = null;
 let processor: Processor | null = null;
 let device: "webgpu" | "wasm" = "wasm";
 
+// Object detection (YOLOS) + promptable segmentation (SlimSAM) — plan §4.2,
+// implemented as point-prompts (a detected box's center) rather than true
+// box-prompts: the published slimsam-77-uniform ONNX decoder graph only has
+// 4 real inputs (image embeddings x2, input_points, input_labels) — passing
+// input_boxes gets silently ignored by onnxruntime ("too many inputs").
+const DET_MODEL_ID = "Xenova/yolos-tiny";
+const SAM_MODEL_ID = "Xenova/slimsam-77-uniform";
+
+let detModel: PreTrainedModel | null = null;
+let detProcessor: Processor | null = null;
+let samModel: InstanceType<typeof SamModel> | null = null;
+let samProcessor: Processor | null = null;
+
+// Cached per-image SAM encoder state so repeated decode calls (one per
+// selected object) don't re-run the expensive vision encoder.
+let samImage: RawImage | null = null;
+let samEmbeddings: Record<string, Tensor> | null = null;
+
+export interface DetectedBox {
+  label: string;
+  score: number;
+  x0: number;
+  y0: number;
+  x1: number;
+  y1: number;
+}
+
 type In =
   | { id: number; type: "init" }
-  | { id: number; type: "matte"; data: ArrayBuffer; width: number; height: number };
+  | { id: number; type: "matte"; data: ArrayBuffer; width: number; height: number }
+  | { id: number; type: "detect"; data: ArrayBuffer; width: number; height: number }
+  | { id: number; type: "samPrepare"; data: ArrayBuffer; width: number; height: number }
+  | { id: number; type: "samSegment"; boxes: DetectedBox[]; width: number; height: number };
 
 type Out =
   | { id: number; type: "progress"; progress: number; label: string }
   | { id: number; type: "ready"; device: string }
   | { id: number; type: "matte"; mask: ArrayBuffer; width: number; height: number }
+  | { id: number; type: "detections"; boxes: DetectedBox[] }
+  | { id: number; type: "samReady" }
+  | { id: number; type: "segment"; mask: ArrayBuffer; width: number; height: number }
   | { id: number; type: "error"; message: string };
 
 function post(msg: Out, transfer?: Transferable[]) {
@@ -195,6 +232,119 @@ async function runMatte(data: ArrayBuffer, width: number, height: number): Promi
   return matte;
 }
 
+async function ensureDetModel(id: number) {
+  if (detModel && detProcessor) return;
+  const progress_callback = makeProgressTracker(id);
+  detModel = await AutoModelForObjectDetection.from_pretrained(DET_MODEL_ID, {
+    device: "wasm",
+    dtype: "q8",
+    progress_callback,
+  });
+  detProcessor = await AutoProcessor.from_pretrained(DET_MODEL_ID);
+}
+
+async function ensureSamModel(id: number) {
+  if (samModel && samProcessor) return;
+  const progress_callback = makeProgressTracker(id);
+  samModel = (await SamModel.from_pretrained(SAM_MODEL_ID, {
+    device: "wasm",
+    dtype: "q8",
+    progress_callback,
+  })) as InstanceType<typeof SamModel>;
+  samProcessor = await AutoProcessor.from_pretrained(SAM_MODEL_ID);
+}
+
+async function runDetect(data: ArrayBuffer, width: number, height: number): Promise<DetectedBox[]> {
+  const rgba = new Uint8ClampedArray(data);
+  const image = new RawImage(rgba, width, height, 4);
+
+  const inputs = await detProcessor!(image);
+  const outputs = await detModel!(inputs);
+  // `image_processor` is where post_process_object_detection actually lives
+  // in this package version — not directly on the wrapping Processor.
+  const imageProcessor = (
+    detProcessor as unknown as {
+      image_processor: {
+        post_process_object_detection: (
+          outputs: unknown,
+          threshold: number,
+          targetSizes: number[][],
+        ) => { boxes: number[][]; classes: number[]; scores: number[] }[];
+      };
+    }
+  ).image_processor;
+  const [result] = imageProcessor.post_process_object_detection(outputs, 0.5, [[height, width]]);
+
+  const id2label = (detModel!.config as unknown as { id2label: Record<number, string> }).id2label;
+  const boxes = result.boxes.map((box, i) => ({
+    label: id2label[result.classes[i]] ?? `class ${result.classes[i]}`,
+    score: result.scores[i],
+    x0: Math.max(0, box[0]),
+    y0: Math.max(0, box[1]),
+    x1: Math.min(width, box[2]),
+    y1: Math.min(height, box[3]),
+  }));
+  // The model/post-processor returns no deduplication of its own — several
+  // overlapping boxes commonly fire on the same physical object.
+  return nonMaxSuppression(boxes, 0.5);
+}
+
+async function runSamPrepare(data: ArrayBuffer, width: number, height: number) {
+  const rgba = new Uint8ClampedArray(data);
+  samImage = new RawImage(rgba, width, height, 4);
+  const imageInputs = await samProcessor!(samImage);
+  samEmbeddings = (await samModel!.get_image_embeddings(imageInputs)) as unknown as Record<
+    string,
+    Tensor
+  >;
+}
+
+/** Decode one point-prompt per box (reusing cached encoder state) and OR all
+ * resulting masks into a single native-resolution 0/255 alpha mask. */
+async function runSamSegment(boxes: DetectedBox[], width: number, height: number): Promise<Uint8ClampedArray> {
+  if (!samImage || !samEmbeddings) throw new Error("SAM not prepared for this image yet.");
+  const combined = new Uint8ClampedArray(width * height);
+
+  for (const box of boxes) {
+    const cx = (box.x0 + box.x1) / 2;
+    const cy = (box.y0 + box.y1) / 2;
+    const promptInputs = await samProcessor!(samImage, {
+      input_points: [[[cx, cy]]],
+      input_labels: [[1]],
+    });
+    const out = await samModel!({ ...promptInputs, ...samEmbeddings });
+    const iouScores = Array.from((out as unknown as { iou_scores: Tensor }).iou_scores.data as Float32Array);
+    const best = iouScores.indexOf(Math.max(...iouScores));
+
+    const masksArr = await (
+      samProcessor as unknown as {
+        post_process_masks: (
+          pred: Tensor,
+          originalSizes: unknown,
+          reshapedSizes: unknown,
+        ) => Promise<Tensor[]>;
+      }
+    ).post_process_masks(
+      (out as unknown as { pred_masks: Tensor }).pred_masks,
+      (promptInputs as unknown as { original_sizes: unknown }).original_sizes,
+      (promptInputs as unknown as { reshaped_input_sizes: unknown }).reshaped_input_sizes,
+    );
+    const mask = masksArr[0]; // dims: [1, numCandidates, H, W]
+    const [, , H, W] = mask.dims;
+    const maskData = mask.data as Uint8Array;
+    const offset = best * H * W;
+
+    // Union (OR) into the combined mask — upscale isn't needed since
+    // post_process_masks already returns native image resolution.
+    for (let y = 0; y < H; y++) {
+      for (let x = 0; x < W; x++) {
+        if (maskData[offset + y * W + x]) combined[y * width + x] = 255;
+      }
+    }
+  }
+  return combined;
+}
+
 self.onmessage = async (e: MessageEvent<In>) => {
   const msg = e.data;
   try {
@@ -223,6 +373,32 @@ self.onmessage = async (e: MessageEvent<In>) => {
         { id: msg.id, type: "matte", mask: buf, width: msg.width, height: msg.height },
         [buf],
       );
+      return;
+    }
+
+    if (msg.type === "detect") {
+      post({ id: msg.id, type: "progress", progress: 0, label: "Preparing detector…" });
+      await ensureDetModel(msg.id);
+      post({ id: msg.id, type: "progress", progress: 0.9, label: "Detecting objects…" });
+      const boxes = await runDetect(msg.data, msg.width, msg.height);
+      post({ id: msg.id, type: "detections", boxes });
+      return;
+    }
+
+    if (msg.type === "samPrepare") {
+      post({ id: msg.id, type: "progress", progress: 0, label: "Preparing segmentation model…" });
+      await ensureSamModel(msg.id);
+      post({ id: msg.id, type: "progress", progress: 0.9, label: "Analyzing image…" });
+      await runSamPrepare(msg.data, msg.width, msg.height);
+      post({ id: msg.id, type: "samReady" });
+      return;
+    }
+
+    if (msg.type === "samSegment") {
+      const mask = await runSamSegment(msg.boxes, msg.width, msg.height);
+      const buf = mask.buffer.slice(0) as ArrayBuffer;
+      post({ id: msg.id, type: "segment", mask: buf, width: msg.width, height: msg.height }, [buf]);
+      return;
     }
   } catch (err) {
     post({
