@@ -4,7 +4,7 @@ import { useEditor, type Tool } from "@/lib/bg/store";
 import { Button } from "@/components/ui/button";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { PanelTitle } from "./Field";
-import { Sparkles, Brush, Eraser, Hand, Loader2, ImageUp } from "lucide-react";
+import { Sparkles, Brush, Eraser, Wand2, Lasso, Hand, Loader2, ImageUp } from "lucide-react";
 
 export default function Toolbar({
   onAuto,
@@ -46,6 +46,21 @@ export default function Toolbar({
         </ToggleGroupItem>
         <ToggleGroupItem value="remove" aria-label="Remove brush">
           <Eraser /> Remove
+        </ToggleGroupItem>
+      </ToggleGroup>
+
+      <ToggleGroup
+        type="single"
+        variant="outline"
+        value={tool}
+        onValueChange={(v) => v && setTool(v as Tool)}
+        className="mt-2 w-full"
+      >
+        <ToggleGroupItem value="wand" aria-label="Magic wand — auto-select edges">
+          <Wand2 /> Wand
+        </ToggleGroupItem>
+        <ToggleGroupItem value="lasso" aria-label="Lasso — freeform select">
+          <Lasso /> Lasso
         </ToggleGroupItem>
         <ToggleGroupItem value="pan" aria-label="Pan">
           <Hand /> Pan
