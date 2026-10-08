@@ -194,9 +194,18 @@ function makeProgressTracker(id: number) {
 async function ensureModel(id: number) {
   if (model && processor) return;
 
-  // Prefer WebGPU; fall back to WASM (plan §7).
+  // Prefer WebGPU; fall back to WASM (plan §7). Mobile GPU drivers are a
+  // real, known source of silent WebGPU corruption — the compute "succeeds"
+  // (no thrown error) but produces visibly garbled output, so there's
+  // nothing to catch after the fact. Reported in production: RMBG-1.4 via
+  // WebGPU produced a garbled checkerboard/streaking result on an Android
+  // phone (both "desktop site" and normal mobile mode — ruled out as a
+  // viewport/zoom artifact). WASM is proven reliable in every test this
+  // project has run, so mobile just skips WebGPU entirely and eats the
+  // slower CPU path rather than risk a wrong (not just slow) result.
   const hasWebGPU = typeof (self.navigator as Navigator & { gpu?: unknown }).gpu !== "undefined";
-  device = hasWebGPU ? "webgpu" : "wasm";
+  const isMobile = /Android|iPhone|iPad|iPod|Mobile|Tablet/i.test(self.navigator.userAgent);
+  device = hasWebGPU && !isMobile ? "webgpu" : "wasm";
 
   const progress_callback = makeProgressTracker(id);
 
