@@ -1,6 +1,6 @@
 # Remove Background
 
-A fast, **private**, 100% in-browser AI background removal tool. One-click AI removal, **object detection** to pick exactly which subjects to keep, **plus** manual refinement ("shade to keep / shade to remove" brush, magic wand, lasso, and edge tuning) — no account, zero uploads, runs entirely on your device.
+A fast, private, in-browser AI background removal tool. 100% client-side with manual refinement — no uploads, no server.
 
 > **Status:** Implemented (Phases 1–3). One-click AI removal, manual keep/remove brush,
 > edge refinement, background options, and export all work in-browser. The full technical
