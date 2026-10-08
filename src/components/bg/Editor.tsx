@@ -4,21 +4,40 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useEditor } from "@/lib/bg/store";
 import { bitmapToImageData, validateAndDecode } from "@/lib/bg/image";
 import { autoMatte } from "@/lib/bg/worker/client";
+import { downloadCurrent } from "@/lib/bg/download";
 import CanvasStage from "./CanvasStage";
 import Dropzone from "./Dropzone";
 import Toolbar from "./Toolbar";
 import BrushControls from "./BrushControls";
+import SelectionControls from "./SelectionControls";
 import RefinePanel from "./RefinePanel";
 import BackgroundPanel from "./BackgroundPanel";
 import ExportBar from "./ExportBar";
 import HistoryControls from "./HistoryControls";
+import ContextMenu, { type ContextMenuItem } from "./ContextMenu";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
-import { Keyboard } from "lucide-react";
+import {
+  Keyboard,
+  Brush,
+  Eraser,
+  Wand2,
+  Lasso,
+  Hand,
+  Undo2,
+  Redo2,
+  FlipHorizontal2,
+  Sparkles,
+  Download,
+  ImageUp,
+} from "lucide-react";
 
 export default function Editor() {
   const image = useEditor((s) => s.image);
   const [showHelp, setShowHelp] = useState(false);
+  const [menu, setMenu] = useState<{ x: number; y: number; items: ContextMenuItem[] } | null>(
+    null,
+  );
   const autoRunning = useRef(false);
 
   const runAuto = useCallback(async () => {
@@ -31,7 +50,9 @@ export default function Editor() {
     try {
       const mask = await autoMatte(st.image.imageData, (p, label) => {
         const cur = useEditor.getState();
-        if (label.toLowerCase().includes("removing")) cur.setStatus("processing");
+        const lower = label.toLowerCase();
+        if (lower.includes("removing") || lower.includes("finalizing"))
+          cur.setStatus("processing");
         cur.setProgress(p, label);
       });
       useEditor.getState().setAutoMask(mask);
@@ -74,6 +95,69 @@ export default function Editor() {
     };
     input.click();
   }, [importFile]);
+
+  const openContextMenu = useCallback(
+    (e: React.MouseEvent) => {
+      e.preventDefault();
+      const st = useEditor.getState();
+      const icon = (C: typeof Brush) => <C className="size-4" />;
+
+      const items: ContextMenuItem[] = !st.image
+        ? [{ key: "open", label: "Choose image…", icon: icon(ImageUp), onSelect: openPicker }]
+        : [
+            { key: "keep", label: "Keep brush", icon: icon(Brush), onSelect: () => st.setTool("keep") },
+            { key: "remove", label: "Remove brush", icon: icon(Eraser), onSelect: () => st.setTool("remove") },
+            { key: "wand", label: "Magic wand", icon: icon(Wand2), onSelect: () => st.setTool("wand") },
+            { key: "lasso", label: "Lasso select", icon: icon(Lasso), onSelect: () => st.setTool("lasso") },
+            { key: "pan", label: "Pan", icon: icon(Hand), onSelect: () => st.setTool("pan") },
+            { key: "sep1", label: "", separator: true },
+            {
+              key: "undo",
+              label: "Undo",
+              icon: icon(Undo2),
+              disabled: !st.canUndo(),
+              onSelect: () => st.undo(),
+            },
+            {
+              key: "redo",
+              label: "Redo",
+              icon: icon(Redo2),
+              disabled: !st.canRedo(),
+              onSelect: () => st.redo(),
+            },
+            {
+              key: "invert",
+              label: "Invert mask",
+              icon: icon(FlipHorizontal2),
+              onSelect: () => st.invert(),
+            },
+            { key: "sep2", label: "", separator: true },
+            {
+              key: "rerun",
+              label: st.hasAuto ? "Re-run AI removal" : "Remove background (AI)",
+              icon: icon(Sparkles),
+              onSelect: () => void runAuto(),
+            },
+            {
+              key: "download",
+              label: "Download PNG",
+              icon: icon(Download),
+              disabled: !st.hasAuto && st.status !== "ready",
+              onSelect: () => void downloadCurrent({ format: "png" }),
+            },
+            { key: "sep3", label: "", separator: true },
+            {
+              key: "replace",
+              label: "Open a different image",
+              icon: icon(ImageUp),
+              onSelect: openPicker,
+            },
+          ];
+
+      setMenu({ x: e.clientX, y: e.clientY, items });
+    },
+    [openPicker, runAuto],
+  );
 
   // paste-to-import
   useEffect(() => {
@@ -118,6 +202,14 @@ export default function Editor() {
         case "E":
           st.setTool("remove");
           break;
+        case "w":
+        case "W":
+          st.setTool("wand");
+          break;
+        case "l":
+        case "L":
+          st.setTool("lasso");
+          break;
         case "h":
         case "H":
           st.setTool("pan");
@@ -154,7 +246,10 @@ export default function Editor() {
 
   return (
     <div className="grid h-[calc(100vh-3.5rem)] grid-cols-1 bg-border md:grid-cols-[1fr_340px] md:gap-px">
-      <div className="relative h-[70vh] min-h-[60vh] md:h-full">
+      <div
+        className="relative h-[70vh] min-h-[60vh] md:h-full"
+        onContextMenu={openContextMenu}
+      >
         <CanvasStage />
         {!image && <Dropzone onFile={importFile} />}
       </div>
@@ -166,6 +261,7 @@ export default function Editor() {
             <Separator />
             <HistoryControls />
             <BrushControls />
+            <SelectionControls />
             <Separator />
             <RefinePanel />
             <Separator />
@@ -188,6 +284,9 @@ export default function Editor() {
       </aside>
 
       {showHelp && <Shortcuts onClose={() => setShowHelp(false)} />}
+      {menu && (
+        <ContextMenu x={menu.x} y={menu.y} items={menu.items} onClose={() => setMenu(null)} />
+      )}
     </div>
   );
 }
@@ -196,13 +295,17 @@ function Shortcuts({ onClose }: { onClose: () => void }) {
   const rows: [string, string][] = [
     ["K", "Keep brush"],
     ["E", "Remove brush"],
+    ["W", "Magic wand — click to auto-select by edge"],
+    ["L", "Lasso — drag a freeform selection"],
     ["H", "Pan tool"],
+    ["Alt + click/drag", "Flip wand/lasso Remove ↔ Keep"],
     ["[  ]", "Brush size"],
     ["I", "Invert mask"],
     ["Ctrl/⌘ + Z", "Undo"],
     ["Ctrl/⌘ + Shift + Z", "Redo"],
     ["Scroll", "Zoom"],
     ["Space + drag", "Pan"],
+    ["Right-click", "Open the app's action menu"],
     ["?", "Toggle this panel"],
   ];
   return (
