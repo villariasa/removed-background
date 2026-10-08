@@ -18,8 +18,10 @@ npm run dev                  # http://localhost:3000/tools/background-remover
 
 The first background removal downloads the RMBG-1.4 weights (~44 MB, quantized) from the
 HuggingFace Hub once, then caches them for instant repeat use. "Detect objects" downloads two
-more small models on first use (YOLOS-tiny ~10 MB, SlimSAM ~14 MB). Nothing else leaves your
-device.
+more small models on first use (YOLOS-tiny ~10 MB, SlimSAM ~14 MB). The optional "Identify
+unclear objects" button downloads a third, much larger model (CLIP, ~150 MB) — it's opt-in
+and only needed if the detector's 91 known categories miss something. Nothing else leaves
+your device.
 
 ## Project layout
 
@@ -42,6 +44,13 @@ src/lib/bg/worker/                  # ML worker (Transformers.js + RMBG-1.4) + R
   dropped by the session, so true box-conditioned segmentation isn't actually available with
   this export). Detector output gets greedy NMS (IoU > 0.5) since `post_process_object_detection`
   does no deduplication — without it, overlapping duplicate boxes make some unclickable.
+- **"Identify unclear objects" (CLIP zero-shot) is a soft hint, not a fix** — confirmed by
+  testing on a real photo: CLIP correctly says "table lamp" on the *whole* image, but once
+  cropped down to just the detected box (the only way to name *that specific object*), it
+  agreed with the detector's wrong "vase" guess on 2 of 3 boxes, even with 40% padding added.
+  Cropping removes the scene context CLIP actually relies on. So it's opt-in, only shown as
+  "possibly: X" when it both disagrees with the detector and clears a confidence floor, and
+  it never replaces the primary label. It's right some of the time, not reliably better.
 - **WASM is pinned to single-threaded** (`numThreads = 1`) deliberately: threaded WASM needs
   `SharedArrayBuffer`, which requires `COOP`+`COEP` headers, and enabling `COEP` makes
   onnxruntime-web opt into a pthread codepath that throws under this project's CSP. No COEP
