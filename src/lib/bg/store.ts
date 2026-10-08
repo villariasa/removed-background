@@ -10,7 +10,8 @@ import {
 } from "./mask";
 import type { Background } from "./compositor";
 
-export type Tool = "keep" | "remove" | "pan";
+export type Tool = "keep" | "remove" | "wand" | "lasso" | "pan";
+export type SelectMode = "add" | "subtract";
 
 export interface RefineParams {
   feather: number; // px gaussian
@@ -23,6 +24,11 @@ export interface BrushParams {
   size: number; // px at native res
   softness: number; // 0..1
   flow: number; // 0..1
+}
+
+export interface WandParams {
+  tolerance: number; // 0..100
+  contiguous: boolean;
 }
 
 export type Status = "empty" | "loading-model" | "processing" | "ready";
@@ -41,6 +47,8 @@ interface EditorState {
   baseMask: Mask | null; // auto + brush edits (refine applied non-destructively on top)
   tool: Tool;
   brush: BrushParams;
+  wand: WandParams;
+  selectMode: SelectMode;
   refine: RefineParams;
   background: Background;
   status: Status;
@@ -65,6 +73,9 @@ interface EditorState {
   bumpMask: () => void; // signal in-place mask mutation
   setTool: (t: Tool) => void;
   setBrush: (b: Partial<BrushParams>) => void;
+  setWand: (w: Partial<WandParams>) => void;
+  setSelectMode: (m: SelectMode) => void;
+  applySelection: (sel: Uint8ClampedArray, mode: SelectMode) => void;
   setRefine: (r: Partial<RefineParams>) => void;
   setBackground: (b: Background) => void;
   undo: () => void;
@@ -80,6 +91,11 @@ export const useEditor = create<EditorState>((set, get) => ({
   baseMask: null,
   tool: "keep",
   brush: { size: 40, softness: 0.5, flow: 1 },
+  wand: { tolerance: 35, contiguous: true },
+  // Default to "remove" — the overwhelmingly common first move is clicking
+  // the background to delete it. "add" is a no-op on a freshly-loaded image
+  // since the mask already starts fully kept (255 everywhere).
+  selectMode: "subtract",
   refine: { feather: 0, grow: 0, threshold: 0, spill: 0 },
   background: { kind: "transparent" },
   status: "empty",
@@ -146,6 +162,19 @@ export const useEditor = create<EditorState>((set, get) => ({
 
   setTool: (tool) => set({ tool }),
   setBrush: (b) => set((s) => ({ brush: { ...s.brush, ...b } })),
+  setWand: (w) => set((s) => ({ wand: { ...s.wand, ...w } })),
+  setSelectMode: (selectMode) => set({ selectMode }),
+
+  applySelection: (sel, mode) => {
+    const { baseMask } = get();
+    if (!baseMask) return;
+    const value = mode === "add" ? 255 : 0;
+    for (let i = 0; i < sel.length; i++) {
+      if (sel[i] > 0) baseMask[i] = value;
+    }
+    get().bumpMask();
+    get().commitStroke();
+  },
   setRefine: (r) => set((s) => ({ refine: { ...s.refine, ...r } })),
   setBackground: (background) => set({ background }),
 
