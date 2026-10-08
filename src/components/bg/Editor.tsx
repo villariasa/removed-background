@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useEditor } from "@/lib/bg/store";
 import { bitmapToImageData, validateAndDecode } from "@/lib/bg/image";
-import { autoMatte } from "@/lib/bg/worker/client";
+import { autoMatte, detectObjects, samPrepare, samSegment } from "@/lib/bg/worker/client";
 import { downloadCurrent } from "@/lib/bg/download";
 import CanvasStage from "./CanvasStage";
 import Dropzone from "./Dropzone";
@@ -28,6 +28,7 @@ import {
   Redo2,
   FlipHorizontal2,
   Sparkles,
+  ScanSearch,
   Download,
   ImageUp,
 } from "lucide-react";
@@ -64,6 +65,70 @@ export default function Editor() {
       useEditor.getState().setStatus("ready");
     } finally {
       autoRunning.current = false;
+    }
+  }, []);
+
+  const detectRunning = useRef(false);
+
+  const runDetect = useCallback(async () => {
+    const st = useEditor.getState();
+    if (!st.image || detectRunning.current) return;
+    detectRunning.current = true;
+    st.setError(null);
+    st.clearDetections();
+    st.setDetectStatus("detecting");
+    st.setStatus("loading-model");
+    st.setProgress(0, "Preparing detector…");
+    try {
+      const boxes = await detectObjects(st.image.imageData, (p, label) => {
+        useEditor.getState().setProgress(p, label);
+      });
+      if (boxes.length === 0) {
+        useEditor.getState().setError("No objects detected in this image.");
+        useEditor.getState().setDetectStatus("idle");
+      } else {
+        useEditor.getState().setDetections(boxes);
+      }
+      useEditor.getState().setStatus("ready");
+    } catch (err) {
+      useEditor.getState().setError(
+        err instanceof Error ? err.message : "Object detection failed.",
+      );
+      useEditor.getState().setDetectStatus("idle");
+      useEditor.getState().setStatus("ready");
+    } finally {
+      detectRunning.current = false;
+    }
+  }, []);
+
+  const runApplyDetections = useCallback(async () => {
+    const st = useEditor.getState();
+    const img = st.image;
+    if (!img) return;
+    const selected = st.detections.filter((d) => d.selected);
+    if (selected.length === 0) return;
+
+    st.setError(null);
+    st.setDetectStatus("segmenting");
+    st.setStatus("loading-model");
+    st.setProgress(0, "Preparing segmentation model…");
+    try {
+      await samPrepare(img.imageData, (p, label) => {
+        useEditor.getState().setProgress(p, label);
+      });
+      useEditor.getState().setProgress(0.95, `Segmenting ${selected.length} object(s)…`);
+      useEditor.getState().setStatus("processing");
+      const mask = await samSegment(selected, img.width, img.height);
+      useEditor.getState().setAutoMask(mask);
+      useEditor.getState().clearDetections();
+      useEditor.getState().setProgress(1, "Done");
+    } catch (err) {
+      useEditor.getState().setError(
+        err instanceof Error ? err.message : "Segmentation failed.",
+      );
+    } finally {
+      useEditor.getState().setDetectStatus("idle");
+      useEditor.getState().setStatus("ready");
     }
   }, []);
 
@@ -139,6 +204,12 @@ export default function Editor() {
               onSelect: () => void runAuto(),
             },
             {
+              key: "detect",
+              label: "Detect objects",
+              icon: icon(ScanSearch),
+              onSelect: () => void runDetect(),
+            },
+            {
               key: "download",
               label: "Download PNG",
               icon: icon(Download),
@@ -156,7 +227,7 @@ export default function Editor() {
 
       setMenu({ x: e.clientX, y: e.clientY, items });
     },
-    [openPicker, runAuto],
+    [openPicker, runAuto, runDetect],
   );
 
   // paste-to-import
@@ -210,6 +281,10 @@ export default function Editor() {
         case "L":
           st.setTool("lasso");
           break;
+        case "d":
+        case "D":
+          void runDetect();
+          break;
         case "h":
         case "H":
           st.setTool("pan");
@@ -250,14 +325,14 @@ export default function Editor() {
         className="relative h-[70vh] min-h-[60vh] md:h-full"
         onContextMenu={openContextMenu}
       >
-        <CanvasStage />
+        <CanvasStage onApplyDetections={runApplyDetections} />
         {!image && <Dropzone onFile={importFile} />}
       </div>
 
       <aside className="flex flex-col gap-5 overflow-y-auto bg-background p-4">
         {image ? (
           <>
-            <Toolbar onAuto={runAuto} onReplace={openPicker} />
+            <Toolbar onAuto={runAuto} onDetect={runDetect} onReplace={openPicker} />
             <Separator />
             <HistoryControls />
             <BrushControls />
@@ -276,8 +351,9 @@ export default function Editor() {
           <div>
             <h3 className="mb-2 text-sm font-semibold">Getting started</h3>
             <p className="text-sm text-muted-foreground">
-              Drop or paste an image to begin. AI removal runs automatically, then refine with
-              the keep/remove brushes and edge tools.
+              Drop or paste an image to begin. AI removal runs automatically, or use{" "}
+              <strong>Detect objects</strong> to pick exactly which subjects to keep — then
+              refine with the keep/remove brushes and edge tools.
             </p>
           </div>
         )}
@@ -297,6 +373,7 @@ function Shortcuts({ onClose }: { onClose: () => void }) {
     ["E", "Remove brush"],
     ["W", "Magic wand — click to auto-select by edge"],
     ["L", "Lasso — drag a freeform selection"],
+    ["D", "Detect objects — click boxes to pick, then Apply"],
     ["H", "Pan tool"],
     ["Alt + click/drag", "Flip wand/lasso Remove ↔ Keep"],
     ["[  ]", "Brush size"],
