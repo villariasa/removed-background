@@ -15,7 +15,11 @@ interface View {
   oy: number;
 }
 
-export default function CanvasStage() {
+export default function CanvasStage({
+  onApplyDetections,
+}: {
+  onApplyDetections: () => void;
+}) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
   const offscreenRef = useRef<HTMLCanvasElement | null>(null);
@@ -25,10 +29,27 @@ export default function CanvasStage() {
   const refine = useEditor((s) => s.refine);
   const background = useEditor((s) => s.background);
   const tool = useEditor((s) => s.tool);
+  const detections = useEditor((s) => s.detections);
 
   const viewRef = useRef<View>({ scale: 1, ox: 0, oy: 0 });
   const [, force] = useState(0);
   const rerender = useCallback(() => force((n) => n + 1), []);
+  const boxElsRef = useRef<Map<number, HTMLButtonElement>>(new Map());
+
+  // Keep the detection-box overlay in sync with the current pan/zoom. Called
+  // from paint() (imperative, like the brush cursor) so dragging/zooming
+  // stays smooth without a React re-render per frame.
+  const syncBoxPositions = useCallback(() => {
+    const v = viewRef.current;
+    for (const d of useEditor.getState().detections) {
+      const el = boxElsRef.current.get(d.id);
+      if (!el) continue;
+      el.style.left = `${d.x0 * v.scale + v.ox}px`;
+      el.style.top = `${d.y0 * v.scale + v.oy}px`;
+      el.style.width = `${(d.x1 - d.x0) * v.scale}px`;
+      el.style.height = `${(d.y1 - d.y0) * v.scale}px`;
+    }
+  }, []);
 
   const pointer = useRef<{ x: number; y: number; inside: boolean }>({
     x: 0,
@@ -97,6 +118,8 @@ export default function CanvasStage() {
     ctx.drawImage(off, 0, 0);
     ctx.restore();
 
+    syncBoxPositions();
+
     // brush cursor ring
     const t = useEditor.getState().tool;
     if (pointer.current.inside && (t === "keep" || t === "remove")) {
@@ -132,7 +155,7 @@ export default function CanvasStage() {
       }
       ctx.restore();
     }
-  }, []);
+  }, [syncBoxPositions]);
 
   const scheduleePaint = useCallback(() => {
     if (rafRef.current != null) return;
@@ -167,6 +190,12 @@ export default function CanvasStage() {
     buildComposite();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [maskVersion, refine, background, image]);
+
+  // New detection-box elements need their position set as soon as they
+  // mount (paint() only runs on pan/zoom/mask changes otherwise).
+  useEffect(() => {
+    syncBoxPositions();
+  }, [detections, syncBoxPositions]);
 
   // keep canvas sized to container
   useEffect(() => {
@@ -383,7 +412,89 @@ export default function CanvasStage() {
         }}
         onWheel={onWheel}
       />
+
+      {detections.length > 0 && (
+        <div className="pointer-events-none absolute inset-0 z-10">
+          {/* Largest-area first, so a smaller box nested inside a bigger one
+              paints on top and stays clickable (NMS removes most overlap,
+              but distinct objects can still legitimately nest, e.g. a held
+              item inside a person's box). */}
+          {[...detections]
+            .sort((a, b) => (b.x1 - b.x0) * (b.y1 - b.y0) - (a.x1 - a.x0) * (a.y1 - a.y0))
+            .map((d) => (
+            <button
+              key={d.id}
+              ref={(el) => {
+                if (el) boxElsRef.current.set(d.id, el);
+                else boxElsRef.current.delete(d.id);
+              }}
+              onClick={() => useEditor.getState().toggleDetection(d.id)}
+              className={`pointer-events-auto absolute flex items-start justify-start rounded-sm border-2 text-left transition-colors ${
+                d.selected
+                  ? "border-primary bg-primary/10"
+                  : "border-muted-foreground/40 bg-transparent"
+              }`}
+              title={`${d.label} (${Math.round(d.score * 100)}%) — click to ${d.selected ? "exclude" : "include"}`}
+            >
+              <span
+                className={`-translate-y-full rounded-sm px-1.5 py-0.5 text-xs font-medium whitespace-nowrap ${
+                  d.selected
+                    ? "bg-primary text-primary-foreground"
+                    : "bg-muted-foreground/70 text-background"
+                }`}
+              >
+                {d.label} {Math.round(d.score * 100)}%
+              </span>
+            </button>
+          ))}
+        </div>
+      )}
+
       <StageStatus onFit={fit} />
+      <DetectionActionBar onApply={onApplyDetections} />
+    </div>
+  );
+}
+
+function DetectionActionBar({ onApply }: { onApply: () => void }) {
+  const detections = useEditor((s) => s.detections);
+  const detectStatus = useEditor((s) => s.detectStatus);
+  const toggleAll = useEditor((s) => s.selectAllDetections);
+  const clear = useEditor((s) => s.clearDetections);
+
+  if (detections.length === 0) return null;
+  const selectedCount = detections.filter((d) => d.selected).length;
+  const busy = detectStatus === "segmenting";
+
+  return (
+    <div className="absolute top-3 right-3 z-20 flex items-center gap-2 rounded-lg border bg-popover/95 p-2 text-sm shadow-md backdrop-blur">
+      <span className="px-1 text-xs text-muted-foreground">
+        {selectedCount}/{detections.length} selected
+      </span>
+      <Button
+        variant="outline"
+        size="sm"
+        className="h-7 px-2 text-xs"
+        onClick={() => toggleAll(true)}
+        disabled={busy}
+      >
+        All
+      </Button>
+      <Button
+        variant="outline"
+        size="sm"
+        className="h-7 px-2 text-xs"
+        onClick={() => toggleAll(false)}
+        disabled={busy}
+      >
+        None
+      </Button>
+      <Button variant="ghost" size="sm" className="h-7 px-2 text-xs" onClick={clear} disabled={busy}>
+        Cancel
+      </Button>
+      <Button size="sm" className="h-7 px-2 text-xs" onClick={onApply} disabled={busy || selectedCount === 0}>
+        {busy ? "Applying…" : `Apply (${selectedCount})`}
+      </Button>
     </div>
   );
 }
@@ -393,12 +504,19 @@ export default function CanvasStage() {
 // (per-file names/percentages) and changes rapidly.
 function stageFromLabel(label: string): 0 | 1 | 2 {
   const l = label.toLowerCase();
-  if (l.includes("removing") || l.includes("finalizing")) return 2;
+  if (
+    l.includes("removing") ||
+    l.includes("finalizing") ||
+    l.includes("detecting") ||
+    l.includes("analyzing") ||
+    l.includes("segmenting")
+  )
+    return 2;
   if (l.includes("loading") || l.includes("falling back")) return 1;
   return 0;
 }
 
-const STAGES = ["Download", "Load", "Remove"];
+const STAGES = ["Download", "Load", "Process"];
 
 function StageStatus({ onFit }: { onFit: () => void }) {
   const status = useEditor((s) => s.status);
@@ -476,8 +594,8 @@ function StageStatus({ onFit }: { onFit: () => void }) {
 
           {stage === 0 && (
             <p className="max-w-xs text-center text-xs text-muted-foreground/70">
-              First run downloads the model (~44&nbsp;MB on CPU, smaller with
-              GPU acceleration) — cached after that.
+              First use of each tool downloads its model (a few MB to ~44&nbsp;MB) —
+              cached after that.
             </p>
           )}
         </div>
