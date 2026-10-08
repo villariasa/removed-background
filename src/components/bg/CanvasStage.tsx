@@ -1,11 +1,13 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useEditor } from "@/lib/bg/store";
-import { applyRefine } from "@/lib/bg/mask";
+import { useEditor, type SelectMode } from "@/lib/bg/store";
+import { applyRefine, strokeSegment } from "@/lib/bg/mask";
 import { composite, type Background } from "@/lib/bg/compositor";
-import { strokeSegment } from "@/lib/bg/mask";
+import { magicWandSelect } from "@/lib/bg/magicWand";
+import { polygonSelect, simplifyPath, type Point } from "@/lib/bg/lasso";
 import { Button } from "@/components/ui/button";
+import { Loader2 } from "lucide-react";
 
 interface View {
   scale: number;
@@ -39,6 +41,8 @@ export default function CanvasStage() {
   const lastImgPt = useRef<{ x: number; y: number } | null>(null);
   const lastPan = useRef<{ x: number; y: number } | null>(null);
   const rafRef = useRef<number | null>(null);
+  const lassoActive = useRef(false);
+  const lassoPoints = useRef<Point[]>([]);
 
   // (Re)build the offscreen image-resolution composite whenever the mask,
   // refine params, background, or image changes.
@@ -106,6 +110,27 @@ export default function CanvasStage() {
       ctx.strokeStyle = "rgba(255,255,255,0.7)";
       ctx.lineWidth = 0.75;
       ctx.stroke();
+    }
+
+    // live lasso path preview
+    if (t === "lasso" && lassoPoints.current.length > 1) {
+      ctx.save();
+      ctx.translate(v.ox, v.oy);
+      ctx.scale(v.scale, v.scale);
+      ctx.beginPath();
+      ctx.moveTo(lassoPoints.current[0].x, lassoPoints.current[0].y);
+      for (const pt of lassoPoints.current.slice(1)) ctx.lineTo(pt.x, pt.y);
+      if (!lassoActive.current) ctx.closePath();
+      ctx.setLineDash([6 / v.scale, 4 / v.scale]);
+      ctx.lineWidth = 1.5 / v.scale;
+      ctx.strokeStyle = "rgba(37,99,235,0.95)";
+      ctx.stroke();
+      ctx.setLineDash([]);
+      if (lassoActive.current) {
+        ctx.fillStyle = "rgba(37,99,235,0.08)";
+        ctx.fill();
+      }
+      ctx.restore();
     }
   }, []);
 
@@ -178,6 +203,10 @@ export default function CanvasStage() {
   }
 
   const onPointerDown = (e: React.PointerEvent) => {
+    // Right-click is reserved for the app's context menu — never start a
+    // stroke/selection from it.
+    if (e.button === 2) return;
+
     const t = useEditor.getState().tool;
     (e.target as Element).setPointerCapture(e.pointerId);
     const isPan = t === "pan" || spaceHeld.current || e.button === 1;
@@ -191,8 +220,42 @@ export default function CanvasStage() {
       const p = toImage(e.clientX, e.clientY);
       lastImgPt.current = { x: p.x, y: p.y };
       paintStroke(p.x, p.y, p.x, p.y, e.pressure);
+      return;
+    }
+    if (t === "wand") {
+      const p = toImage(e.clientX, e.clientY);
+      runWandSelect(p.x, p.y, effectiveSelectMode(e));
+      return;
+    }
+    if (t === "lasso") {
+      const p = toImage(e.clientX, e.clientY);
+      lassoActive.current = true;
+      lassoPoints.current = [{ x: p.x, y: p.y }];
     }
   };
+
+  function effectiveSelectMode(e: { altKey: boolean }): SelectMode {
+    const mode = useEditor.getState().selectMode;
+    if (!e.altKey) return mode;
+    return mode === "add" ? "subtract" : "add";
+  }
+
+  function runWandSelect(x: number, y: number, mode: SelectMode) {
+    const st = useEditor.getState();
+    const img = st.image;
+    if (!img) return;
+    const sel = magicWandSelect(
+      img.imageData,
+      img.width,
+      img.height,
+      x,
+      y,
+      st.wand.tolerance,
+      st.wand.contiguous,
+    );
+    st.applySelection(sel, mode);
+    scheduleBuild();
+  }
 
   const onPointerMove = (e: React.PointerEvent) => {
     const p = toImage(e.clientX, e.clientY);
@@ -209,6 +272,9 @@ export default function CanvasStage() {
     if (drawing.current && lastImgPt.current) {
       paintStroke(lastImgPt.current.x, lastImgPt.current.y, p.x, p.y, e.pressure);
       lastImgPt.current = { x: p.x, y: p.y };
+    } else if (lassoActive.current) {
+      lassoPoints.current = [...lassoPoints.current, { x: p.x, y: p.y }];
+      scheduleePaint();
     } else {
       scheduleePaint();
     }
@@ -219,6 +285,18 @@ export default function CanvasStage() {
       drawing.current = false;
       lastImgPt.current = null;
       useEditor.getState().commitStroke();
+    }
+    if (lassoActive.current) {
+      lassoActive.current = false;
+      const img = useEditor.getState().image;
+      const path = simplifyPath(lassoPoints.current, 1.5);
+      if (img && path.length >= 3) {
+        const sel = polygonSelect(path, img.width, img.height);
+        useEditor.getState().applySelection(sel, effectiveSelectMode(e));
+        scheduleBuild();
+      }
+      lassoPoints.current = [];
+      scheduleePaint();
     }
     if (panning.current) {
       panning.current = false;
@@ -277,7 +355,14 @@ export default function CanvasStage() {
     scheduleePaint();
   };
 
-  const cursor = tool === "pan" ? "grab" : tool === "keep" || tool === "remove" ? "none" : "default";
+  const cursor =
+    tool === "pan"
+      ? "grab"
+      : tool === "keep" || tool === "remove"
+        ? "none"
+        : tool === "wand" || tool === "lasso"
+          ? "crosshair"
+          : "default";
 
   return (
     <div className="checker absolute inset-0 overflow-hidden" ref={wrapRef}>
@@ -303,6 +388,18 @@ export default function CanvasStage() {
   );
 }
 
+// Coarse stage derived from the worker's label, so the UI can highlight
+// "Download → Load → Remove" even though the label text itself is granular
+// (per-file names/percentages) and changes rapidly.
+function stageFromLabel(label: string): 0 | 1 | 2 {
+  const l = label.toLowerCase();
+  if (l.includes("removing") || l.includes("finalizing")) return 2;
+  if (l.includes("loading") || l.includes("falling back")) return 1;
+  return 0;
+}
+
+const STAGES = ["Download", "Load", "Remove"];
+
 function StageStatus({ onFit }: { onFit: () => void }) {
   const status = useEditor((s) => s.status);
   const progress = useEditor((s) => s.progress);
@@ -310,22 +407,58 @@ function StageStatus({ onFit }: { onFit: () => void }) {
   const image = useEditor((s) => s.image);
 
   const busy = status === "loading-model" || status === "processing";
+  const pct = Math.round(progress * 100);
+  const stage = stageFromLabel(label);
 
   return (
     <>
       {busy && (
         <div
-          className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-3 bg-background/80 backdrop-blur-sm"
+          className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-4 bg-background/85 backdrop-blur-sm"
           role="status"
           aria-live="polite"
         >
-          <div className="h-2 w-60 overflow-hidden rounded-full bg-muted">
+          <div className="flex items-center gap-3">
+            <Loader2 className="size-5 animate-spin text-primary" />
+            <span className="text-2xl font-semibold tabular-nums">{pct}%</span>
+          </div>
+
+          <div className="h-1.5 w-64 overflow-hidden rounded-full bg-muted">
             <div
               className="h-full bg-primary transition-[width] duration-200"
-              style={{ width: `${Math.round(progress * 100)}%` }}
+              style={{ width: `${pct}%` }}
             />
           </div>
-          <div className="text-sm text-muted-foreground">{label || "Working…"}</div>
+
+          <div className="min-h-5 max-w-xs truncate text-center text-sm text-muted-foreground">
+            {label || "Working…"}
+          </div>
+
+          <div className="flex items-center gap-2 text-xs text-muted-foreground">
+            {STAGES.map((s, i) => (
+              <span key={s} className="flex items-center gap-2">
+                <span
+                  className={
+                    i < stage
+                      ? "font-medium text-primary"
+                      : i === stage
+                        ? "font-medium text-foreground"
+                        : "text-muted-foreground/60"
+                  }
+                >
+                  {s}
+                </span>
+                {i < STAGES.length - 1 && <span className="text-muted-foreground/40">›</span>}
+              </span>
+            ))}
+          </div>
+
+          {stage === 0 && (
+            <p className="max-w-xs text-center text-xs text-muted-foreground/70">
+              First run downloads the model (~44&nbsp;MB on CPU, smaller with
+              GPU acceleration) — cached after that.
+            </p>
+          )}
         </div>
       )}
       {image && (
