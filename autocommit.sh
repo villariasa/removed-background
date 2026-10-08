@@ -7,8 +7,8 @@
 # "auto: <add|update|delete> <path>".
 #
 # Usage:
-#   ./autocommit.sh            # commit every pending file, one commit each
-#   ./autocommit.sh --push     # ...then push to the current upstream
+#   ./autocommit.sh            # commit every pending file, then push to origin main
+#   ./autocommit.sh --no-push  # commit only, do not push
 #   ./autocommit.sh -n         # dry run: list what WOULD be committed, no changes
 #
 # It operates on the git repo that CONTAINS this script, so it's safe to run
@@ -17,10 +17,11 @@
 set -euo pipefail
 
 DRY_RUN=0
-DO_PUSH=0
+DO_PUSH=1
 for arg in "$@"; do
   case "$arg" in
     -n|--dry-run) DRY_RUN=1 ;;
+    --no-push)    DO_PUSH=0 ;;
     --push)       DO_PUSH=1 ;;
     -h|--help)    sed -n '2,22p' "$0"; exit 0 ;;
     *) echo "unknown option: $arg" >&2; exit 2 ;;
@@ -110,7 +111,8 @@ done
 
 echo "done — $count commit(s)."
 
-if [ "$DO_PUSH" -eq 1 ] && [ "$count" -gt 0 ]; then
-  echo "pushing..."
-  git push
+if [ "$DO_PUSH" -eq 1 ]; then
+  branch="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "main")"
+  echo "pushing to origin $branch..."
+  git push origin "$branch"
 fi
