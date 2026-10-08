@@ -306,11 +306,23 @@ async function runSamSegment(boxes: DetectedBox[], width: number, height: number
   const combined = new Uint8ClampedArray(width * height);
 
   for (const box of boxes) {
+    // Three foreground points instead of one: dead-center plus two points
+    // offset along the box diagonal. A single center point under-segments
+    // objects that are cut off by the frame edge or irregularly shaped —
+    // confirmed empirically (a cat cropped in half: single-point IoU
+    // candidates [0.83,0.88,0.37] covering 45% of the frame vs three-point
+    // [0.95,0.95,0.90] covering 56%, correctly extending to the cut edges).
+    // Verified harmless on normal, fully-visible objects (near-identical
+    // mask vs single-point there).
     const cx = (box.x0 + box.x1) / 2;
     const cy = (box.y0 + box.y1) / 2;
+    const qx1 = box.x0 + (box.x1 - box.x0) * 0.3;
+    const qy1 = box.y0 + (box.y1 - box.y0) * 0.3;
+    const qx2 = box.x0 + (box.x1 - box.x0) * 0.7;
+    const qy2 = box.y0 + (box.y1 - box.y0) * 0.7;
     const promptInputs = await samProcessor!(samImage, {
-      input_points: [[[cx, cy]]],
-      input_labels: [[1]],
+      input_points: [[[cx, cy], [qx1, qy1], [qx2, qy2]]],
+      input_labels: [[1, 1, 1]],
     });
     const out = await samModel!({ ...promptInputs, ...samEmbeddings });
     const iouScores = Array.from((out as unknown as { iou_scores: Tensor }).iou_scores.data as Float32Array);
