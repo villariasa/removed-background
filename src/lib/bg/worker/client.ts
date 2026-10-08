@@ -128,3 +128,24 @@ export async function samSegment(
   );
   return new Uint8ClampedArray(res.mask);
 }
+
+/**
+ * Opt-in open-vocabulary naming (CLIP zero-shot) for objects the detector
+ * may have mislabeled. Returns the same boxes, each optionally carrying
+ * `altLabel`/`altScore` when CLIP disagrees with the detector with enough
+ * confidence to be worth showing as a "possibly: X" hint. Large extra
+ * download (~150MB) — only call this when the user explicitly asks for it.
+ */
+export async function identifyObjects(
+  imageData: ImageData,
+  boxes: DetectedBox[],
+  onProgress?: ProgressCb,
+): Promise<DetectedBox[]> {
+  const buf = imageData.data.buffer.slice(0);
+  const res = await call<{ boxes: DetectedBox[] }>(
+    { type: "identify", data: buf, width: imageData.width, height: imageData.height, boxes },
+    [buf],
+    onProgress,
+  );
+  return res.boxes;
+}
