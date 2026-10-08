@@ -10,12 +10,14 @@ import {
   AutoProcessor,
   SamModel,
   RawImage,
+  pipeline,
   env,
   type PreTrainedModel,
   type Processor,
   type Tensor,
 } from "@huggingface/transformers";
 import { nonMaxSuppression } from "../nms";
+import { COMMON_OBJECTS } from "../objectVocab";
 
 // Remote (HF Hub) vs self-hosted weights. Build-time inlined (plan §10.5).
 const REMOTE = process.env.NEXT_PUBLIC_BG_REMOTE_MODELS !== "false";
@@ -67,6 +69,21 @@ let samProcessor: Processor | null = null;
 let samImage: RawImage | null = null;
 let samEmbeddings: Record<string, Tensor> | null = null;
 
+// Open-vocabulary "possibly: X" naming — opt-in (user clicks "Identify
+// unclear objects"), never auto-run, because it's a large extra download
+// (~150MB) for a result that's only sometimes better than the detector's
+// own guess. See the memory note / README for why this is a hint, not a
+// replacement: CLIP classifies the CROPPED box, which removes the scene
+// context it actually needs — confirmed on a real photo where it correctly
+// said "table lamp" on the whole image but agreed with the detector's wrong
+// "vase" guess once cropped to just that object.
+const CLIP_MODEL_ID = "Xenova/clip-vit-base-patch32";
+type ClipClassifier = (
+  image: RawImage,
+  labels: string[],
+) => Promise<{ label: string; score: number }[]>;
+let clipClassifier: ClipClassifier | null = null;
+
 export interface DetectedBox {
   label: string;
   score: number;
@@ -74,6 +91,8 @@ export interface DetectedBox {
   y0: number;
   x1: number;
   y1: number;
+  altLabel?: string;
+  altScore?: number;
 }
 
 type In =
@@ -81,7 +100,8 @@ type In =
   | { id: number; type: "matte"; data: ArrayBuffer; width: number; height: number }
   | { id: number; type: "detect"; data: ArrayBuffer; width: number; height: number }
   | { id: number; type: "samPrepare"; data: ArrayBuffer; width: number; height: number }
-  | { id: number; type: "samSegment"; boxes: DetectedBox[]; width: number; height: number };
+  | { id: number; type: "samSegment"; boxes: DetectedBox[]; width: number; height: number }
+  | { id: number; type: "identify"; data: ArrayBuffer; width: number; height: number; boxes: DetectedBox[] };
 
 type Out =
   | { id: number; type: "progress"; progress: number; label: string }
@@ -90,6 +110,7 @@ type Out =
   | { id: number; type: "detections"; boxes: DetectedBox[] }
   | { id: number; type: "samReady" }
   | { id: number; type: "segment"; mask: ArrayBuffer; width: number; height: number }
+  | { id: number; type: "identified"; boxes: DetectedBox[] }
   | { id: number; type: "error"; message: string };
 
 function post(msg: Out, transfer?: Transferable[]) {
@@ -254,6 +275,57 @@ async function ensureSamModel(id: number) {
   samProcessor = await AutoProcessor.from_pretrained(SAM_MODEL_ID);
 }
 
+async function ensureClipModel(id: number) {
+  if (clipClassifier) return;
+  const progress_callback = makeProgressTracker(id);
+  clipClassifier = (await pipeline("zero-shot-image-classification", CLIP_MODEL_ID, {
+    device: "wasm",
+    dtype: "q8",
+    progress_callback,
+  })) as unknown as ClipClassifier;
+}
+
+/** Pad a box by `frac` of its own size on each side, clamped to the image. */
+function padBox(box: DetectedBox, frac: number, width: number, height: number) {
+  const padX = (box.x1 - box.x0) * frac;
+  const padY = (box.y1 - box.y0) * frac;
+  return {
+    x0: Math.max(0, Math.round(box.x0 - padX)),
+    y0: Math.max(0, Math.round(box.y0 - padY)),
+    x1: Math.min(width, Math.round(box.x1 + padX)),
+    y1: Math.min(height, Math.round(box.y1 + padY)),
+  };
+}
+
+async function runIdentify(
+  data: ArrayBuffer,
+  width: number,
+  height: number,
+  boxes: DetectedBox[],
+): Promise<DetectedBox[]> {
+  const rgba = new Uint8ClampedArray(data);
+  const image = new RawImage(rgba, width, height, 4);
+
+  const out: DetectedBox[] = [];
+  for (const box of boxes) {
+    const pad = padBox(box, 0.4, width, height);
+    // crop() takes [x_min, y_min, x_max, y_max] inclusive and returns a new
+    // RawImage (a fresh canvas), leaving the source image untouched.
+    const crop = await image.crop([pad.x0, pad.y0, pad.x1 - 1, pad.y1 - 1]);
+    const results = await clipClassifier!(crop, COMMON_OBJECTS);
+    const top = results[0];
+    // Only attach a hint when it disagrees with the detector AND clears a
+    // minimal confidence bar — otherwise it's just noise ("possibly: vase"
+    // under a box already correctly labeled "vase" helps no one).
+    if (top && top.label !== box.label && top.score > 0.15) {
+      out.push({ ...box, altLabel: top.label, altScore: top.score });
+    } else {
+      out.push(box);
+    }
+  }
+  return out;
+}
+
 async function runDetect(data: ArrayBuffer, width: number, height: number): Promise<DetectedBox[]> {
   const rgba = new Uint8ClampedArray(data);
   const image = new RawImage(rgba, width, height, 4);
@@ -410,6 +482,15 @@ self.onmessage = async (e: MessageEvent<In>) => {
       const mask = await runSamSegment(msg.boxes, msg.width, msg.height);
       const buf = mask.buffer.slice(0) as ArrayBuffer;
       post({ id: msg.id, type: "segment", mask: buf, width: msg.width, height: msg.height }, [buf]);
+      return;
+    }
+
+    if (msg.type === "identify") {
+      post({ id: msg.id, type: "progress", progress: 0, label: "Preparing naming model…" });
+      await ensureClipModel(msg.id);
+      post({ id: msg.id, type: "progress", progress: 0.9, label: "Identifying objects…" });
+      const boxes = await runIdentify(msg.data, msg.width, msg.height, msg.boxes);
+      post({ id: msg.id, type: "identified", boxes });
       return;
     }
   } catch (err) {
