@@ -6,7 +6,7 @@ import { Scissors } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 const LINKS = [
-  { href: "/tools/background-remover", label: "Remove Background" },
+  { href: "/tools/background-remover", label: "Qavlune" },
   { href: "/tools/background-remover/developer", label: "Developer" },
   { href: "/tools/background-remover/api", label: "API Guide" },
   { href: "/tools/background-remover/security", label: "Security" },
@@ -17,7 +17,7 @@ export default function ToolNav() {
 
   return (
     <nav
-      aria-label="Background remover"
+      aria-label="Qavlune background remover"
       className="sticky top-0 z-40 flex h-14 items-center gap-2 border-b bg-background/80 px-4 backdrop-blur-md sm:px-6"
     >
       <Link
@@ -27,7 +27,7 @@ export default function ToolNav() {
         <span className="flex size-7 items-center justify-center rounded-md bg-primary text-primary-foreground">
           <Scissors className="size-4" />
         </span>
-        <span className="hidden sm:inline">Remove Background</span>
+        <span className="hidden sm:inline">Qavlune</span>
       </Link>
       <div className="ml-auto flex items-center gap-1 overflow-x-auto">
         {LINKS.map((l) => {

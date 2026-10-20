@@ -3,7 +3,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { ShieldCheck } from "lucide-react";
 
 export const metadata: Metadata = {
-  title: "Security — Remove Background",
+  title: "Security — Qavlune",
   description: "Privacy and security statement for the in-browser background remover.",
 };
 

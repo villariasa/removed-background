@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import { Card, CardContent } from "@/components/ui/card";
 
 export const metadata: Metadata = {
-  title: "API Guide — Remove Background",
+  title: "API Guide — Qavlune",
   description: "Client-side usage and the optional server REST API.",
 };
 

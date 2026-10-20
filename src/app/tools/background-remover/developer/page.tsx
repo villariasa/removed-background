@@ -4,7 +4,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 
 export const metadata: Metadata = {
-  title: "Developer — Remove Background",
+  title: "Developer — Qavlune",
   description: "How the in-browser background remover is built.",
 };
 

@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import ToolNav from "@/components/bg/ToolNav";
 
 export const metadata: Metadata = {
-  title: "Remove Background",
+  title: "Qavlune",
 };
 
 export default function ToolLayout({
